@@ -167,8 +167,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({
 
   // Toggle user status
   const handleToggleStatus = (user: UserAccount) => {
-    if (user.id === currentUser.id) {
-      alert('You cannot disable your own active account.');
+    if (user.id === currentUser.id || user.email.toLowerCase() === 'alaminkaigama@gmail.com') {
+      alert('The primary Super Admin account (alaminkaigama@gmail.com) cannot be disabled.');
       return;
     }
     const updated: UserAccount = {
@@ -304,12 +304,12 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                     <td className="py-3 px-4 text-center">
                       <button
                         onClick={() => handleToggleStatus(user)}
-                        disabled={user.id === currentUser.id}
+                        disabled={user.id === currentUser.id || user.email.toLowerCase() === 'alaminkaigama@gmail.com'}
                         className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded text-xs font-semibold ${
                           user.status === 'active'
                             ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                             : 'bg-red-50 text-red-700 hover:bg-red-100'
-                        }`}
+                        } ${user.email.toLowerCase() === 'alaminkaigama@gmail.com' ? 'opacity-80 cursor-not-allowed' : ''}`}
                       >
                         {user.status === 'active' ? (
                           <>
@@ -343,7 +343,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                       >
                         Edit
                       </button>
-                      {user.id !== currentUser.id && (
+                      {user.id !== currentUser.id && user.email.toLowerCase() !== 'alaminkaigama@gmail.com' && (
                         <button
                           onClick={() => {
                             if (window.confirm(`Delete user account for "${user.fullName}"?`)) {

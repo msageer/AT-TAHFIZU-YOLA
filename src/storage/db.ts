@@ -16,6 +16,15 @@ export type { AppDatabase };
 import { calculateGrade, rankAssessments } from '../utils/ranking';
 
 const STORAGE_KEY = 'islamic_school_db_v2';
+const BACKUP_STORAGE_KEY = 'islamic_school_db_backup_snapshot';
+const LEGACY_STORAGE_KEYS = [
+  'islamic_school_db_v2',
+  'islamic_school_db_backup_snapshot',
+  'islamic_school_db',
+  'islamic_school_db_v1',
+  'islamic_school_database',
+  'islamic_school_management_db',
+];
 const AUTH_SESSION_KEY = 'islamic_school_auth_session_v2';
 
 export const DEFAULT_GRADING_BOUNDARIES: GradeBoundary[] = [
@@ -38,12 +47,12 @@ export const DEFAULT_PSYCHOMOTOR_ITEMS: PsychomotorItem[] = [
 ];
 
 export const DEFAULT_SUPER_ADMIN: UserAccount = {
-  id: 'usr-admin',
-  email: 'admin@school.edu',
-  username: 'admin',
-  fullName: 'Mallam Abubakar Lamido (Super Admin)',
-  phone: '08033408522',
-  passwordHash: 'admin123',
+  id: 'usr-superadmin-alamin',
+  email: 'alaminkaigama@gmail.com',
+  username: 'alaminkaigama',
+  fullName: 'Alamin Kaigama',
+  phone: '07066979027',
+  passwordHash: '123456',
   role: 'super_admin',
   schoolId: 'school-main',
   status: 'active',
@@ -81,7 +90,7 @@ export const DEFAULT_STAFF_ACCOUNT: UserAccount = {
 };
 
 /**
- * Returns clean production database with onboarding pre-completed and default admin ready.
+ * Returns clean production database with onboarding pre-completed and default super admin ready.
  */
 export function getEmptyDatabase(): AppDatabase {
   return {
@@ -93,7 +102,7 @@ export function getEmptyDatabase(): AppDatabase {
       motto: 'شعارنا: خيركم من تعلم القرآن وعلمه',
       address: 'Along Bypass Road, Lamido Zubairu Way, Yola',
       telephone: '08033408522, 08058715879',
-      email: 'admin@school.edu',
+      email: 'alaminkaigama@gmail.com',
       website: '',
       currentSession: '2026/2027',
       currentTerm: '1st Term',
@@ -132,50 +141,162 @@ export function getEmptyDatabase(): AppDatabase {
     students: [],
     assessments: [],
     attendance: [],
-    users: [DEFAULT_SUPER_ADMIN, DEFAULT_TEACHER_ACCOUNT, DEFAULT_STAFF_ACCOUNT],
+    users: [DEFAULT_SUPER_ADMIN],
     auditLogs: [],
   };
 }
 
 /**
  * Loads database from local storage, or initializes clean empty database
+ * STRICT NON-TAMPERING: Never overrides existing student, class, assessment, or settings data.
+ * Checks primary key, backup snapshot, and legacy keys across all deployments.
  */
 export function loadDatabase(): AppDatabase {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw: string | null = null;
+    // 1. Check primary storage key
+    raw = localStorage.getItem(STORAGE_KEY);
+
+    // 2. Check backup and legacy deployment keys if primary is empty
+    if (!raw) {
+      for (const key of LEGACY_STORAGE_KEYS) {
+        const val = localStorage.getItem(key);
+        if (val) {
+          try {
+            const testParsed = JSON.parse(val);
+            if (testParsed && typeof testParsed === 'object') {
+              raw = val;
+              break;
+            }
+          } catch {
+            // ignore invalid JSON
+          }
+        }
+      }
+    }
+
     if (!raw) {
       const initial = getEmptyDatabase();
       saveDatabase(initial);
       return initial;
     }
+
     const parsed = JSON.parse(raw) as AppDatabase;
 
-    // Safety checks & fallbacks
+    // Safety checks & fallbacks - NEVER overwrite existing user data
     if (!parsed.schoolId) parsed.schoolId = 'school-main';
-    if (!parsed.settings) parsed.settings = getEmptyDatabase().settings;
-    parsed.settings.isSetupComplete = true; // Onboarding is completed once
-    if (!parsed.classes) parsed.classes = getEmptyDatabase().classes;
-    if (!parsed.sections) parsed.sections = getEmptyDatabase().sections;
-    if (!parsed.subjects) parsed.subjects = getEmptyDatabase().subjects;
-    if (!parsed.terms || parsed.terms.length === 0) parsed.terms = ['1st Term', '2nd Term', '3rd Term'];
-    if (!parsed.sessions || parsed.sessions.length === 0) parsed.sessions = ['2025/2026', '2026/2027', '2027/2028'];
+
+    // Settings: merge non-destructively so existing school details are 100% preserved
+    const defaultSettings = getEmptyDatabase().settings;
+    parsed.settings = {
+      ...defaultSettings,
+      ...(parsed.settings || {}),
+      isSetupComplete: true, // Keep marked complete
+    };
+
+    // Classes, Sections, Subjects: preserve existing configurations
+    if (!parsed.classes || parsed.classes.length === 0) {
+      parsed.classes = getEmptyDatabase().classes;
+    }
+    if (!parsed.sections || parsed.sections.length === 0) {
+      parsed.sections = getEmptyDatabase().sections;
+    }
+    if (!parsed.subjects || parsed.subjects.length === 0) {
+      parsed.subjects = getEmptyDatabase().subjects;
+    }
+    if (!parsed.terms || parsed.terms.length === 0) {
+      parsed.terms = ['1st Term', '2nd Term', '3rd Term'];
+    }
+    if (!parsed.sessions || parsed.sessions.length === 0) {
+      parsed.sessions = ['2025/2026', '2026/2027', '2027/2028'];
+    }
     if (!parsed.gradingBoundaries || parsed.gradingBoundaries.length === 0) {
       parsed.gradingBoundaries = [...DEFAULT_GRADING_BOUNDARIES];
     }
     if (!parsed.psychomotorItems || parsed.psychomotorItems.length === 0) {
       parsed.psychomotorItems = [...DEFAULT_PSYCHOMOTOR_ITEMS];
     }
-    if (!parsed.students) parsed.students = [];
-    if (!parsed.assessments) parsed.assessments = [];
-    if (!parsed.attendance) parsed.attendance = [];
-    if (!parsed.users || parsed.users.length === 0) {
-      parsed.users = [DEFAULT_SUPER_ADMIN, DEFAULT_TEACHER_ACCOUNT, DEFAULT_STAFF_ACCOUNT];
+
+    // STRICT NON-TAMPERING: Preserve all existing student records
+    if (!parsed.students || !Array.isArray(parsed.students)) {
+      parsed.students = [];
     }
+
+    // Secondary recovery check: if parsed has no students, check backup snapshot
+    if (parsed.students.length === 0) {
+      try {
+        const backupRaw = localStorage.getItem(BACKUP_STORAGE_KEY);
+        if (backupRaw) {
+          const backupParsed = JSON.parse(backupRaw) as AppDatabase;
+          if (backupParsed?.students && backupParsed.students.length > 0) {
+            parsed.students = backupParsed.students;
+            if (backupParsed.assessments && backupParsed.assessments.length > 0) {
+              parsed.assessments = backupParsed.assessments;
+            }
+            if (backupParsed.attendance && backupParsed.attendance.length > 0) {
+              parsed.attendance = backupParsed.attendance;
+            }
+          }
+        }
+      } catch {
+        // ignore backup recovery errors
+      }
+    }
+
+    // STRICT NON-TAMPERING: Preserve all assessment records
+    if (!parsed.assessments || !Array.isArray(parsed.assessments)) {
+      parsed.assessments = [];
+    }
+
+    // STRICT NON-TAMPERING: Preserve all attendance records
+    if (!parsed.attendance || !Array.isArray(parsed.attendance)) {
+      parsed.attendance = [];
+    }
+
+    // User Accounts: Purge only obsolete test admin credentials while preserving all user-created staff & teachers
+    const cleanedUsers = (parsed.users || []).filter(u => {
+      const emailLower = (u.email || '').toLowerCase().trim();
+      const usernameLower = (u.username || '').toLowerCase().trim();
+      if (emailLower === 'admin@school.edu' || emailLower === 'admin@attahfiz.edu') return false;
+      if (usernameLower === 'superadmin' && emailLower !== 'alaminkaigama@gmail.com') return false;
+      if (u.id === 'usr-admin') return false;
+      if (u.role === 'super_admin' && emailLower !== 'alaminkaigama@gmail.com') return false;
+      return true;
+    });
+
+    // Ensure Alamin Kaigama (alaminkaigama@gmail.com) is Super Admin with credentials preserved
+    const alaminIndex = cleanedUsers.findIndex(u => u.email.toLowerCase().trim() === 'alaminkaigama@gmail.com');
+    if (alaminIndex >= 0) {
+      cleanedUsers[alaminIndex] = {
+        ...cleanedUsers[alaminIndex],
+        id: cleanedUsers[alaminIndex].id || 'usr-superadmin-alamin',
+        email: 'alaminkaigama@gmail.com',
+        username: cleanedUsers[alaminIndex].username || 'alaminkaigama',
+        fullName: cleanedUsers[alaminIndex].fullName || 'Alamin Kaigama',
+        passwordHash: cleanedUsers[alaminIndex].passwordHash || '123456',
+        role: 'super_admin',
+        status: 'active',
+      };
+    } else {
+      cleanedUsers.unshift(DEFAULT_SUPER_ADMIN);
+    }
+
+    parsed.users = cleanedUsers;
     if (!parsed.auditLogs) parsed.auditLogs = [];
 
+    // Save migrated and validated state back to storage
+    saveDatabase(parsed);
     return parsed;
   } catch (err) {
-    console.error('Failed to load database from localStorage, initializing empty defaults:', err);
+    console.error('Failed to load database from localStorage, checking backup recovery:', err);
+    try {
+      const backupRaw = localStorage.getItem(BACKUP_STORAGE_KEY);
+      if (backupRaw) {
+        return JSON.parse(backupRaw) as AppDatabase;
+      }
+    } catch {
+      // ignore
+    }
     const initial = getEmptyDatabase();
     saveDatabase(initial);
     return initial;
@@ -184,7 +305,10 @@ export function loadDatabase(): AppDatabase {
 
 export function saveDatabase(db: AppDatabase): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+    const serialized = JSON.stringify(db);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    // Continuous safety backup snapshot to prevent any data loss across git deployments
+    localStorage.setItem(BACKUP_STORAGE_KEY, serialized);
   } catch (err) {
     console.error('Failed to save database to localStorage:', err);
   }
@@ -229,7 +353,17 @@ export function getCurrentSessionUser(): UserAccount | null {
   try {
     const raw = localStorage.getItem(AUTH_SESSION_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const user = JSON.parse(raw) as UserAccount;
+    const emailLower = (user.email || '').toLowerCase().trim();
+    if (
+      emailLower === 'admin@school.edu' ||
+      emailLower === 'admin@attahfiz.edu' ||
+      (user.role === 'super_admin' && emailLower !== 'alaminkaigama@gmail.com')
+    ) {
+      localStorage.removeItem(AUTH_SESSION_KEY);
+      return null;
+    }
+    return user;
   } catch {
     return null;
   }
@@ -267,12 +401,12 @@ export const SAMPLE_SCHOOL_LOGO = `data:image/svg+xml;utf8,<svg xmlns="http://ww
 export function loadDemoDevelopmentDatabase(): AppDatabase {
   const demoUsers: UserAccount[] = [
     {
-      id: 'usr-admin',
-      email: 'admin@attahfiz.edu',
-      username: 'superadmin',
-      fullName: 'Mallam Abubakar Lamido (Super Admin)',
-      phone: '08033408522',
-      passwordHash: 'admin123',
+      id: 'usr-superadmin-alamin',
+      email: 'alaminkaigama@gmail.com',
+      username: 'alaminkaigama',
+      fullName: 'Alamin Kaigama',
+      phone: '07066979027',
+      passwordHash: '123456',
       role: 'super_admin',
       schoolId: 'school-main',
       status: 'active',

@@ -422,8 +422,6 @@ export default function App() {
       <AuthPage
         db={db}
         onLoginSuccess={handleLoginSuccess}
-        onInitializeSuperAdmin={handleInitializeSuperAdmin}
-        onLoadDemoData={handleLoadDemoData}
       />
     );
   }
