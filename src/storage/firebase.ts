@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  deleteDoc,
   collection,
   getDocs,
   onSnapshot,
@@ -216,6 +217,63 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `schools/${SCHOOL_DOC_ID}`);
+  }
+}
+
+/**
+ * Permanently removes a student and their associated assessments from Firestore.
+ */
+export async function deleteStudentFromFirestore(
+  studentInternalId: string,
+  studentId?: string
+): Promise<void> {
+  try {
+    const studentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', studentInternalId);
+    await deleteDoc(studentRef);
+
+    if (studentId) {
+      // Also clean up any assessments belonging to this student in Firestore
+      const asmCol = collection(db, 'schools', SCHOOL_DOC_ID, 'assessments');
+      const asmSnaps = await getDocs(asmCol);
+      const batch = writeBatch(db);
+      let count = 0;
+      asmSnaps.forEach(d => {
+        const data = d.data();
+        if (data.studentId === studentId) {
+          batch.delete(d.ref);
+          count++;
+        }
+      });
+      if (count > 0) {
+        await batch.commit();
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/students/${studentInternalId}`);
+  }
+}
+
+/**
+ * Permanently removes an assessment from Firestore.
+ */
+export async function deleteAssessmentFromFirestore(assessmentId: string): Promise<void> {
+  try {
+    const asmRef = doc(db, 'schools', SCHOOL_DOC_ID, 'assessments', assessmentId);
+    await deleteDoc(asmRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/assessments/${assessmentId}`);
+  }
+}
+
+/**
+ * Permanently removes a user account from Firestore.
+ */
+export async function deleteUserFromFirestore(userId: string): Promise<void> {
+  try {
+    const userRef = doc(db, 'schools', SCHOOL_DOC_ID, 'users', userId);
+    await deleteDoc(userRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/users/${userId}`);
   }
 }
 

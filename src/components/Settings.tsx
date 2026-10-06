@@ -8,6 +8,7 @@ import {
   PsychomotorItem,
   AppDatabase,
 } from '../types';
+import { ConfirmModal } from './ConfirmModal';
 import {
   Upload,
   Save,
@@ -34,6 +35,17 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   const [activeSection, setActiveSection] = useState<
     'school' | 'classes' | 'sections' | 'subjects' | 'grading' | 'psychomotor' | 'backup'
   >('school');
+
+  // In-App Confirmation Pop-up State
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
 
   // Form states
   const [schoolSettings, setSchoolSettings] = useState<SchoolSettings>({ ...db.settings });
@@ -132,13 +144,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
       showNotification('At least one class is required', 'error');
       return;
     }
-    if (!window.confirm(`Are you sure you want to delete class "${name}"? Existing student records will retain their class name.`)) {
-      return;
-    }
-    const updated = classes.filter(c => c.id !== id);
-    setClasses(updated);
-    onUpdateDb({ ...db, classes: updated });
-    showNotification(`Class "${name}" removed.`);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Delete Class',
+      message: `Are you sure you want to delete class "${name}"? Existing student records will retain their class name.`,
+      variant: 'danger',
+      confirmText: 'Yes, Delete Class',
+      onConfirm: () => {
+        const updated = classes.filter(c => c.id !== id);
+        setClasses(updated);
+        onUpdateDb({ ...db, classes: updated });
+        showNotification(`Class "${name}" removed.`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   // Section management handlers
@@ -166,11 +185,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
       showNotification('At least one section is required', 'error');
       return;
     }
-    if (!window.confirm(`Delete section "${name}"?`)) return;
-    const updated = sections.filter(s => s.id !== id);
-    setSections(updated);
-    onUpdateDb({ ...db, sections: updated });
-    showNotification(`Section "${name}" deleted.`);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Delete Section',
+      message: `Are you sure you want to delete section "${name}"?`,
+      variant: 'danger',
+      confirmText: 'Yes, Delete Section',
+      onConfirm: () => {
+        const updated = sections.filter(s => s.id !== id);
+        setSections(updated);
+        onUpdateDb({ ...db, sections: updated });
+        showNotification(`Section "${name}" deleted.`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   // Subject management handlers
@@ -198,11 +226,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   };
 
   const handleDeleteSubject = (id: string, name: string) => {
-    if (!window.confirm(`Delete subject "${name}"? Past records will remain intact.`)) return;
-    const updated = subjects.filter(s => s.id !== id);
-    setSubjects(updated);
-    onUpdateDb({ ...db, subjects: updated });
-    showNotification(`Subject "${name}" deleted.`);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Delete Subject',
+      message: `Are you sure you want to delete subject "${name}"? Past records will remain intact.`,
+      variant: 'danger',
+      confirmText: 'Yes, Delete Subject',
+      onConfirm: () => {
+        const updated = subjects.filter(s => s.id !== id);
+        setSubjects(updated);
+        onUpdateDb({ ...db, subjects: updated });
+        showNotification(`Subject "${name}" deleted.`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   const handleToggleSubject = (id: string) => {
@@ -988,10 +1025,18 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
               </p>
               <button
                 onClick={() => {
-                  if (window.confirm('Reset database to default sample data? This will reset all current records.')) {
-                    onResetDefaults();
-                    showNotification('Database reset to defaults successfully.');
-                  }
+                  setConfirmModalConfig({
+                    isOpen: true,
+                    title: 'Reset to Sample Data',
+                    message: 'Are you sure you want to reset the database to default sample data? This will replace current records with sample school data.',
+                    variant: 'danger',
+                    confirmText: 'Yes, Reset Database',
+                    onConfirm: () => {
+                      onResetDefaults();
+                      showNotification('Database reset to defaults successfully.');
+                      setConfirmModalConfig(null);
+                    },
+                  });
                 }}
                 className="w-full bg-red-700 hover:bg-red-800 text-white text-xs font-semibold py-2 rounded transition flex items-center justify-center space-x-1.5"
               >
@@ -1001,6 +1046,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
             </div>
           </div>
         </div>
+      )}
+
+      {/* Confirmation Pop-up Modal */}
+      {confirmModalConfig && (
+        <ConfirmModal
+          isOpen={confirmModalConfig.isOpen}
+          title={confirmModalConfig.title}
+          message={confirmModalConfig.message}
+          details={confirmModalConfig.details}
+          confirmText={confirmModalConfig.confirmText}
+          variant={confirmModalConfig.variant}
+          onConfirm={confirmModalConfig.onConfirm}
+          onCancel={() => setConfirmModalConfig(null)}
+        />
       )}
     </div>
   );

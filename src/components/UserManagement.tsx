@@ -5,6 +5,7 @@ import {
   UserRole,
   StaffPermission,
 } from '../types';
+import { ConfirmModal } from './ConfirmModal';
 import {
   Users,
   UserPlus,
@@ -38,6 +39,17 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   const [resetPasswordUser, setResetPasswordUser] = useState<UserAccount | null>(null);
   const [newPasswordVal, setNewPasswordVal] = useState('');
   const [notification, setNotification] = useState<string | null>(null);
+
+  // In-App Confirmation Pop-up State
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
 
   // Form State
   const [fullName, setFullName] = useState('');
@@ -346,9 +358,18 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                       {user.id !== currentUser.id && user.email.toLowerCase() !== 'alaminkaigama@gmail.com' && (
                         <button
                           onClick={() => {
-                            if (window.confirm(`Delete user account for "${user.fullName}"?`)) {
-                              onDeleteUser(user.id);
-                            }
+                            setConfirmModalConfig({
+                              isOpen: true,
+                              title: 'Delete User Account',
+                              message: `Are you sure you want to delete the user account for "${user.fullName}"?`,
+                              details: `Email: ${user.email} • Role: ${user.role.toUpperCase()}`,
+                              variant: 'danger',
+                              confirmText: 'Yes, Delete Account',
+                              onConfirm: () => {
+                                onDeleteUser(user.id);
+                                setConfirmModalConfig(null);
+                              },
+                            });
                           }}
                           className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition"
                           title="Delete User"
@@ -632,6 +653,20 @@ export const UserManagement: React.FC<UserManagementProps> = ({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Confirmation Pop-up Modal */}
+      {confirmModalConfig && (
+        <ConfirmModal
+          isOpen={confirmModalConfig.isOpen}
+          title={confirmModalConfig.title}
+          message={confirmModalConfig.message}
+          details={confirmModalConfig.details}
+          confirmText={confirmModalConfig.confirmText}
+          variant={confirmModalConfig.variant}
+          onConfirm={confirmModalConfig.onConfirm}
+          onCancel={() => setConfirmModalConfig(null)}
+        />
       )}
     </div>
   );

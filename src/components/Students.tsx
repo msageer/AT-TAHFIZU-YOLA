@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Student, AppDatabase, NavigationTab, UserAccount } from '../types';
+import { ConfirmModal } from './ConfirmModal';
 import {
   Search,
   Plus,
@@ -51,6 +52,18 @@ export const Students: React.FC<StudentsProps> = ({
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [selectedStudentForProfile, setSelectedStudentForProfile] = useState<Student | null>(null);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+
+  // In-App Confirmation Pop-up State
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    cancelText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
 
   // Form input state
   const [formData, setFormData] = useState<Partial<Student>>({
@@ -184,8 +197,45 @@ export const Students: React.FC<StudentsProps> = ({
       status: (formData.status as any) || 'Active',
     };
 
+    if (editingStudent) {
+      setConfirmModalConfig({
+        isOpen: true,
+        title: 'Confirm Student Profile Update',
+        message: `Are you sure you want to update the profile details for "${studentToSave.name}"?`,
+        details: `Student ID: ${studentToSave.studentId} • Admission: ${studentToSave.admissionNumber} • Class: ${studentToSave.className} (${studentToSave.section})`,
+        variant: 'primary',
+        confirmText: 'Yes, Save Changes',
+        onConfirm: () => {
+          onSaveStudent(studentToSave);
+          setIsFormOpen(false);
+          setConfirmModalConfig(null);
+        },
+      });
+      return;
+    }
+
     onSaveStudent(studentToSave);
     setIsFormOpen(false);
+  };
+
+  // Trigger Delete Confirmation Pop-up Modal
+  const handleDeleteClick = (student: Student) => {
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Student Deletion',
+      message: `Are you sure you want to delete the student record for "${student.name}"? This will permanently remove all associated assessment scores and attendance history.`,
+      details: `Student: ${student.name} • Class: ${student.className} (${student.section}) • ID: ${student.studentId} • Admission: ${student.admissionNumber}`,
+      variant: 'danger',
+      confirmText: 'Yes, Delete Student',
+      cancelText: 'Cancel',
+      onConfirm: () => {
+        onDeleteStudent(student.id);
+        if (selectedStudentForProfile?.id === student.id) {
+          setSelectedStudentForProfile(null);
+        }
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   return (
@@ -424,11 +474,7 @@ export const Students: React.FC<StudentsProps> = ({
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => {
-                            if (window.confirm(`Delete student record for ${student.name}?`)) {
-                              onDeleteStudent(student.id);
-                            }
-                          }}
+                          onClick={() => handleDeleteClick(student)}
                           className="p-1.5 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded transition"
                           title="Delete Student"
                         >
@@ -821,34 +867,76 @@ export const Students: React.FC<StudentsProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-end space-x-2 pt-4 border-t border-slate-100 mt-4">
-              <button
-                onClick={() => {
-                  setSelectedStudentForProfile(null);
-                  onSelectAssessmentStudent(
-                    selectedStudentForProfile.studentId,
-                    selectedStudentForProfile.className,
-                    selectedStudentForProfile.section
-                  );
-                }}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg flex items-center space-x-1"
-              >
-                <ClipboardPenLine className="w-3.5 h-3.5" />
-                <span>Enter Assessment</span>
-              </button>
-              <button
-                onClick={() => {
-                  setSelectedStudentForProfile(null);
-                  onSelectReportStudent(selectedStudentForProfile.studentId);
-                }}
-                className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold px-3 py-2 rounded-lg flex items-center space-x-1"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>View Report</span>
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-4 border-t border-slate-100 mt-4">
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const student = selectedStudentForProfile;
+                    setSelectedStudentForProfile(null);
+                    handleOpenEdit(student);
+                  }}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-lg flex items-center space-x-1"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Profile</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleDeleteClick(selectedStudentForProfile);
+                  }}
+                  className="bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold px-3 py-2 rounded-lg flex items-center space-x-1 border border-red-200"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Student</span>
+                </button>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    setSelectedStudentForProfile(null);
+                    onSelectAssessmentStudent(
+                      selectedStudentForProfile.studentId,
+                      selectedStudentForProfile.className,
+                      selectedStudentForProfile.section
+                    );
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg flex items-center space-x-1"
+                >
+                  <ClipboardPenLine className="w-3.5 h-3.5" />
+                  <span>Enter Assessment</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedStudentForProfile(null);
+                    onSelectReportStudent(selectedStudentForProfile.studentId);
+                  }}
+                  className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold px-3 py-2 rounded-lg flex items-center space-x-1"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>View Report</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Confirmation Pop-up Modal */}
+      {confirmModalConfig && (
+        <ConfirmModal
+          isOpen={confirmModalConfig.isOpen}
+          title={confirmModalConfig.title}
+          message={confirmModalConfig.message}
+          details={confirmModalConfig.details}
+          confirmText={confirmModalConfig.confirmText}
+          cancelText={confirmModalConfig.cancelText}
+          variant={confirmModalConfig.variant}
+          onConfirm={confirmModalConfig.onConfirm}
+          onCancel={() => setConfirmModalConfig(null)}
+        />
       )}
     </div>
   );

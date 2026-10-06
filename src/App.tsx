@@ -10,6 +10,8 @@ import {
 import {
   setupRealtimeSync,
   syncDatabaseToFirestore,
+  deleteStudentFromFirestore,
+  deleteUserFromFirestore,
 } from './storage/firebase';
 import {
   AppDatabase,
@@ -193,6 +195,11 @@ export default function App() {
       );
     }
     updateDatabase(updatedDb);
+
+    // Explicitly delete user from cloud Firestore
+    deleteUserFromFirestore(userId).catch(err => {
+      console.error('Failed to delete user from cloud:', err);
+    });
   };
 
   // ==========================================
@@ -246,6 +253,11 @@ export default function App() {
       );
     }
     updateDatabase(updatedDb);
+
+    // Explicitly delete from cloud Firestore so it doesn't resurrect on snapshot
+    deleteStudentFromFirestore(studentInternalId, targetStudent?.studentId).catch(err => {
+      console.error('Failed to delete student from cloud:', err);
+    });
   };
 
   // ==========================================

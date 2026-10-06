@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AppDatabase, Student, StudentHistoryEntry } from '../types';
+import { ConfirmModal } from './ConfirmModal';
 import {
   GraduationCap,
   ArrowRight,
@@ -40,6 +41,15 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
   const [fromSession, setFromSession] = useState<string>(db.settings.currentSession);
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
 
   // Eligible students in 'From Class'
   const eligibleStudents = db.students.filter(s => {
@@ -63,19 +73,7 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
     }
   };
 
-  // Perform promotion
-  const handlePromote = () => {
-    if (selectedStudentIds.length === 0) {
-      alert('Please select at least one student to promote.');
-      return;
-    }
-
-    if (fromClass === toClass) {
-      if (!window.confirm(`Both 'From Class' and 'To Class' are "${fromClass}". Do you want to re-enroll/repeat them in this class?`)) {
-        return;
-      }
-    }
-
+  const executePromotion = () => {
     const historyEntries: Record<string, StudentHistoryEntry> = {};
 
     selectedStudentIds.forEach(id => {
@@ -105,7 +103,30 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
       `Successfully promoted ${selectedStudentIds.length} student(s) to ${toClass} (Section ${toSection})! Their past academic records have been safely archived in their profiles.`
     );
     setSelectedStudentIds([]);
+    setConfirmModalConfig(null);
     setTimeout(() => setSuccessMessage(null), 5000);
+  };
+
+  // Perform promotion with confirmation pop-up
+  const handlePromote = () => {
+    if (selectedStudentIds.length === 0) {
+      return;
+    }
+
+    const isSameClass = fromClass === toClass;
+    setConfirmModalConfig({
+      isOpen: true,
+      title: isSameClass ? 'Confirm Re-Enrollment / Repeat' : 'Confirm Student Promotion',
+      message: isSameClass
+        ? `Both source and destination are "${fromClass}". Are you sure you want to re-enroll/repeat ${selectedStudentIds.length} students in this class?`
+        : `Are you sure you want to promote ${selectedStudentIds.length} student(s) from "${fromClass}" to "${toClass}" (${toSection})?`,
+      details: `Count: ${selectedStudentIds.length} students • Target: ${toClass} (${toSection})`,
+      variant: isSameClass ? 'warning' : 'primary',
+      confirmText: isSameClass ? 'Yes, Re-enroll' : 'Yes, Promote Students',
+      onConfirm: () => {
+        executePromotion();
+      },
+    });
   };
 
   return (
@@ -362,6 +383,20 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Confirmation Modal */}
+      {confirmModalConfig && (
+        <ConfirmModal
+          isOpen={confirmModalConfig.isOpen}
+          title={confirmModalConfig.title}
+          message={confirmModalConfig.message}
+          details={confirmModalConfig.details}
+          confirmText={confirmModalConfig.confirmText}
+          variant={confirmModalConfig.variant}
+          onConfirm={confirmModalConfig.onConfirm}
+          onCancel={() => setConfirmModalConfig(null)}
+        />
+      )}
     </div>
   );
 };

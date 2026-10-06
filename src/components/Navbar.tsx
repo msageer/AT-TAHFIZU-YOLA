@@ -20,6 +20,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { SchoolSettings, NavigationTab, UserAccount } from '../types';
+import { ConfirmModal } from './ConfirmModal';
 
 export type { NavigationTab };
 
@@ -43,6 +44,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const isSuperAdmin = currentUser.role === 'super_admin';
   const isTeacher = currentUser.role === 'teacher';
   const isStaff = currentUser.role === 'staff';
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   // Base list of navigation items
   const allNavItems: Array<{
@@ -247,11 +249,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Logout Button */}
             <button
-              onClick={() => {
-                if (window.confirm(`Log out of ${currentUser.fullName}'s session?`)) {
-                  onLogout();
-                }
-              }}
+              onClick={() => setShowLogoutConfirm(true)}
               className="bg-slate-800 hover:bg-red-900/80 hover:text-red-200 text-slate-300 text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-700 hover:border-red-700 transition flex items-center space-x-1.5 shadow-sm"
               title="Sign Out of School Portal"
             >
@@ -293,6 +291,21 @@ export const Navbar: React.FC<NavbarProps> = ({
           })}
         </nav>
       </div>
+
+      {/* Logout Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showLogoutConfirm}
+        title="Sign Out of Portal"
+        message={`Are you sure you want to sign out of ${currentUser.fullName}'s active session?`}
+        confirmText="Yes, Sign Out"
+        cancelText="Cancel"
+        variant="warning"
+        onConfirm={() => {
+          setShowLogoutConfirm(false);
+          onLogout();
+        }}
+        onCancel={() => setShowLogoutConfirm(false)}
+      />
     </header>
   );
 };

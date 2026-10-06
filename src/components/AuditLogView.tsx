@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AuditLogEntry, UserAccount } from '../types';
+import { ConfirmModal } from './ConfirmModal';
 import {
   ShieldAlert,
   Search,
@@ -27,6 +28,7 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [filterAction, setFilterAction] = useState('ALL');
   const [filterRole, setFilterRole] = useState('ALL');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const filteredLogs = logs.filter(log => {
     if (filterRole !== 'ALL' && log.userRole !== filterRole) return false;
@@ -114,11 +116,7 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
 
           {currentUser.role === 'super_admin' && onClearLogs && (
             <button
-              onClick={() => {
-                if (window.confirm('Are you sure you want to clear old activity audit entries?')) {
-                  onClearLogs();
-                }
-              }}
+              onClick={() => setShowClearConfirm(true)}
               className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-semibold text-xs rounded-lg transition flex items-center space-x-1"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -274,6 +272,21 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showClearConfirm}
+        title="Clear Audit Trail"
+        message="Are you sure you want to clear historical audit logs? This action will permanently remove previous activity records."
+        variant="danger"
+        confirmText="Yes, Clear Audit Trail"
+        cancelText="Cancel"
+        onConfirm={() => {
+          setShowClearConfirm(false);
+          onClearLogs?.();
+        }}
+        onCancel={() => setShowClearConfirm(false)}
+      />
     </div>
   );
 };
