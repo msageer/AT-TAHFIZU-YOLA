@@ -1,0 +1,6 @@
+{
+  "name": "Islamic School Student Assessment & Report System",
+  "description": "Comprehensive student assessment, cognitive evaluation, psychomotor grading, attendance tracking, and authentic Islamic school report card generator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

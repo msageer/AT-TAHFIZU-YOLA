@@ -1,0 +1,1007 @@
+import React, { useState, useRef } from 'react';
+import {
+  SchoolSettings,
+  ClassItem,
+  SectionItem,
+  SubjectItem,
+  GradeBoundary,
+  PsychomotorItem,
+  AppDatabase,
+} from '../types';
+import {
+  Upload,
+  Save,
+  Plus,
+  Trash2,
+  RefreshCw,
+  Download,
+  AlertCircle,
+  Building2,
+  GraduationCap,
+  BookOpen,
+  Award,
+  Layers,
+  HeartHandshake,
+} from 'lucide-react';
+
+interface SettingsProps {
+  db: AppDatabase;
+  onUpdateDb: (updated: AppDatabase) => void;
+  onResetDefaults: () => void;
+}
+
+export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefaults }) => {
+  const [activeSection, setActiveSection] = useState<
+    'school' | 'classes' | 'sections' | 'subjects' | 'grading' | 'psychomotor' | 'backup'
+  >('school');
+
+  // Form states
+  const [schoolSettings, setSchoolSettings] = useState<SchoolSettings>({ ...db.settings });
+  const [classes, setClasses] = useState<ClassItem[]>([...db.classes]);
+  const [sections, setSections] = useState<SectionItem[]>([...db.sections]);
+  const [subjects, setSubjects] = useState<SubjectItem[]>([...db.subjects]);
+  const [gradingBoundaries, setGradingBoundaries] = useState<GradeBoundary[]>([
+    ...db.gradingBoundaries,
+  ]);
+  const [psychomotorItems, setPsychomotorItems] = useState<PsychomotorItem[]>([
+    ...db.psychomotorItems,
+  ]);
+
+  // Notifications
+  const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(
+    null
+  );
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const backupInputRef = useRef<HTMLInputElement>(null);
+
+  const showNotification = (text: string, type: 'success' | 'error' = 'success') => {
+    setStatusMessage({ text, type });
+    setTimeout(() => setStatusMessage(null), 4000);
+  };
+
+  // Logo upload handler
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/jpg', 'image/webp', 'image/svg+xml'].includes(file.type)) {
+      showNotification('Please upload a valid image file (PNG, JPG, JPEG, SVG)', 'error');
+      return;
+    }
+
+    if (file.size > 3 * 1024 * 1024) {
+      showNotification('Image size should be under 3MB', 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const dataUrl = ev.target?.result as string;
+      setSchoolSettings(prev => ({ ...prev, logoUrl: dataUrl }));
+      showNotification('School logo uploaded successfully. Remember to click Save Settings!');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Save all settings
+  const handleSaveSchoolSettings = () => {
+    const caTotal = Number(schoolSettings.ca1Max) + Number(schoolSettings.ca2Max) + Number(schoolSettings.examMax);
+    if (caTotal !== 100) {
+      if (!window.confirm(`Warning: 1st CA (${schoolSettings.ca1Max}) + 2nd CA (${schoolSettings.ca2Max}) + Exam (${schoolSettings.examMax}) = ${caTotal}%, not 100%. Do you still want to proceed?`)) {
+        return;
+      }
+    }
+
+    const updatedDb: AppDatabase = {
+      ...db,
+      settings: schoolSettings,
+      classes,
+      sections,
+      subjects,
+      gradingBoundaries,
+      psychomotorItems,
+    };
+    onUpdateDb(updatedDb);
+    showNotification('School settings updated successfully!');
+  };
+
+  // Class management handlers
+  const [newClassName, setNewClassName] = useState('');
+  const handleAddClass = () => {
+    if (!newClassName.trim()) return;
+    const exists = classes.some(c => c.name.toLowerCase() === newClassName.trim().toLowerCase());
+    if (exists) {
+      showNotification(`Class "${newClassName}" already exists`, 'error');
+      return;
+    }
+    const newClass: ClassItem = {
+      id: `cls-${Date.now()}`,
+      name: newClassName.trim(),
+      order: classes.length + 1,
+    };
+    const updated = [...classes, newClass];
+    setClasses(updated);
+    setNewClassName('');
+    onUpdateDb({ ...db, classes: updated });
+    showNotification(`Class "${newClass.name}" added successfully!`);
+  };
+
+  const handleDeleteClass = (id: string, name: string) => {
+    if (classes.length <= 1) {
+      showNotification('At least one class is required', 'error');
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to delete class "${name}"? Existing student records will retain their class name.`)) {
+      return;
+    }
+    const updated = classes.filter(c => c.id !== id);
+    setClasses(updated);
+    onUpdateDb({ ...db, classes: updated });
+    showNotification(`Class "${name}" removed.`);
+  };
+
+  // Section management handlers
+  const [newSectionName, setNewSectionName] = useState('');
+  const handleAddSection = () => {
+    if (!newSectionName.trim()) return;
+    const exists = sections.some(s => s.name.toLowerCase() === newSectionName.trim().toLowerCase());
+    if (exists) {
+      showNotification(`Section "${newSectionName}" already exists`, 'error');
+      return;
+    }
+    const newSec: SectionItem = {
+      id: `sec-${Date.now()}`,
+      name: newSectionName.trim(),
+    };
+    const updated = [...sections, newSec];
+    setSections(updated);
+    setNewSectionName('');
+    onUpdateDb({ ...db, sections: updated });
+    showNotification(`Section "${newSec.name}" added successfully!`);
+  };
+
+  const handleDeleteSection = (id: string, name: string) => {
+    if (sections.length <= 1) {
+      showNotification('At least one section is required', 'error');
+      return;
+    }
+    if (!window.confirm(`Delete section "${name}"?`)) return;
+    const updated = sections.filter(s => s.id !== id);
+    setSections(updated);
+    onUpdateDb({ ...db, sections: updated });
+    showNotification(`Section "${name}" deleted.`);
+  };
+
+  // Subject management handlers
+  const [newSubjectName, setNewSubjectName] = useState('');
+  const [newSubjectArabic, setNewSubjectArabic] = useState('');
+  const handleAddSubject = () => {
+    if (!newSubjectName.trim()) return;
+    const exists = subjects.some(s => s.name.toLowerCase() === newSubjectName.trim().toLowerCase());
+    if (exists) {
+      showNotification(`Subject "${newSubjectName}" already exists`, 'error');
+      return;
+    }
+    const newSub: SubjectItem = {
+      id: `sub-${Date.now()}`,
+      name: newSubjectName.trim(),
+      arabicName: newSubjectArabic.trim() || newSubjectName.trim(),
+      isActive: true,
+    };
+    const updated = [...subjects, newSub];
+    setSubjects(updated);
+    setNewSubjectName('');
+    setNewSubjectArabic('');
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification(`Subject "${newSub.name}" added successfully!`);
+  };
+
+  const handleDeleteSubject = (id: string, name: string) => {
+    if (!window.confirm(`Delete subject "${name}"? Past records will remain intact.`)) return;
+    const updated = subjects.filter(s => s.id !== id);
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification(`Subject "${name}" deleted.`);
+  };
+
+  const handleToggleSubject = (id: string) => {
+    const updated = subjects.map(s => (s.id === id ? { ...s, isActive: !s.isActive } : s));
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+  };
+
+  // Psychomotor management handlers
+  const [newPsychomotorName, setNewPsychomotorName] = useState('');
+  const handleAddPsychomotor = () => {
+    if (!newPsychomotorName.trim()) return;
+    const newPsy: PsychomotorItem = {
+      id: `psy-${Date.now()}`,
+      name: newPsychomotorName.trim(),
+    };
+    const updated = [...psychomotorItems, newPsy];
+    setPsychomotorItems(updated);
+    setNewPsychomotorName('');
+    onUpdateDb({ ...db, psychomotorItems: updated });
+    showNotification(`Psychomotor item "${newPsy.name}" added!`);
+  };
+
+  const handleDeletePsychomotor = (id: string) => {
+    const updated = psychomotorItems.filter(p => p.id !== id);
+    setPsychomotorItems(updated);
+    onUpdateDb({ ...db, psychomotorItems: updated });
+  };
+
+  // Export full JSON backup
+  const handleExportBackup = () => {
+    const nowIso = new Date().toISOString();
+    const updatedSettings = { ...schoolSettings, lastBackupAt: nowIso };
+    setSchoolSettings(updatedSettings);
+    onUpdateDb({ ...db, settings: updatedSettings });
+
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify({ ...db, settings: updatedSettings }, null, 2));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute(
+      'download',
+      `Islamic_School_Assessment_Backup_${new Date().toISOString().split('T')[0]}.json`
+    );
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    showNotification('System database backup exported successfully!');
+  };
+
+  // Restore backup
+  const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        if (!parsed.settings || !parsed.classes || !parsed.students) {
+          throw new Error('Invalid backup file schema');
+        }
+        onUpdateDb(parsed);
+        setSchoolSettings(parsed.settings);
+        setClasses(parsed.classes);
+        setSections(parsed.sections);
+        setSubjects(parsed.subjects);
+        setGradingBoundaries(parsed.gradingBoundaries);
+        setPsychomotorItems(parsed.psychomotorItems);
+        showNotification('Database backup restored successfully!');
+      } catch (err) {
+        showNotification('Failed to restore backup: Invalid JSON file', 'error');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900">Settings &amp; School Setup</h2>
+          <p className="text-xs text-slate-500">
+            Configure school profile, logo, classes, subjects, grading boundaries, and academic sessions.
+          </p>
+        </div>
+
+        <button
+          onClick={handleSaveSchoolSettings}
+          className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+        >
+          <Save className="w-4 h-4" />
+          <span>Save All Settings</span>
+        </button>
+      </div>
+
+      {/* Notification Toast */}
+      {statusMessage && (
+        <div
+          className={`p-3 rounded-lg text-xs font-semibold flex items-center space-x-2 ${
+            statusMessage.type === 'error'
+              ? 'bg-red-50 text-red-800 border border-red-200'
+              : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+          }`}
+        >
+          <AlertCircle className="w-4 h-4" />
+          <span>{statusMessage.text}</span>
+        </div>
+      )}
+
+      {/* Sub-nav tabs */}
+      <div className="flex space-x-1 border-b border-slate-200 overflow-x-auto pb-1 text-xs">
+        <button
+          onClick={() => setActiveSection('school')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'school'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Building2 className="w-3.5 h-3.5" />
+          <span>School Profile &amp; Logo</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSection('classes')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'classes'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <GraduationCap className="w-3.5 h-3.5" />
+          <span>Classes ({classes.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSection('sections')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'sections'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Sections ({sections.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSection('subjects')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'subjects'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          <span>Subjects ({subjects.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSection('grading')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'grading'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Award className="w-3.5 h-3.5" />
+          <span>Grading &amp; Assessment Limits</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSection('psychomotor')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'psychomotor'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <HeartHandshake className="w-3.5 h-3.5" />
+          <span>Psychomotor Items</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSection('backup')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'backup'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Download className="w-3.5 h-3.5" />
+          <span>Backup &amp; Reset</span>
+        </button>
+      </div>
+
+      {/* TAB 1: SCHOOL PROFILE & LOGO */}
+      {activeSection === 'school' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Logo Upload Box */}
+            <div className="md:col-span-1 border-2 border-dashed border-slate-300 rounded-xl p-5 text-center flex flex-col items-center justify-center bg-slate-50/50">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                School Crest / Logo
+              </span>
+              <div className="w-28 h-28 bg-white border border-slate-200 rounded-lg p-2 shadow-inner flex items-center justify-center mb-3">
+                {schoolSettings.logoUrl ? (
+                  <img
+                    src={schoolSettings.logoUrl}
+                    alt="School Logo"
+                    className="max-h-24 max-w-24 object-contain"
+                  />
+                ) : (
+                  <span className="text-xs text-slate-400">No logo</span>
+                )}
+              </div>
+
+              {/* Hidden file input */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleLogoUpload}
+                accept="image/png,image/jpeg,image/jpg,image/webp,image/svg+xml"
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow-sm"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload School Logo</span>
+              </button>
+              <p className="text-[11px] text-slate-500 mt-2">
+                Accepts PNG, JPG, JPEG, SVG. Automatically printed on all report cards.
+              </p>
+            </div>
+
+            {/* School Details */}
+            <div className="md:col-span-2 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  School Name (English)
+                </label>
+                <input
+                  type="text"
+                  value={schoolSettings.schoolName}
+                  onChange={e => setSchoolSettings({ ...schoolSettings, schoolName: e.target.value })}
+                  className="w-full text-sm font-semibold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="e.g. AT-TAHFIZU WAL ITQAN ISLAMIYYA, YOLA"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Arabic School Name (الاسم بالعربية)
+                </label>
+                <input
+                  type="text"
+                  dir="rtl"
+                  value={schoolSettings.arabicSchoolName}
+                  onChange={e =>
+                    setSchoolSettings({ ...schoolSettings, arabicSchoolName: e.target.value })
+                  }
+                  className="w-full text-base font-amiri font-bold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  placeholder="مدرسة التحفيظ والإتقان الإسلامية، يولا"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  School Motto (شعار المدرسة)
+                </label>
+                <input
+                  type="text"
+                  value={schoolSettings.motto}
+                  onChange={e => setSchoolSettings({ ...schoolSettings, motto: e.target.value })}
+                  className="w-full text-xs font-medium border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="شعارنا: خيركم من تعلم القرآن وعلمه"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  School Address
+                </label>
+                <input
+                  type="text"
+                  value={schoolSettings.address}
+                  onChange={e => setSchoolSettings({ ...schoolSettings, address: e.target.value })}
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="Along Bypass Road, beside Bole Street Junction, Lamido Zubairu Way, Yola Town"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Telephone Number(s)
+                  </label>
+                  <input
+                    type="text"
+                    value={schoolSettings.telephone}
+                    onChange={e => setSchoolSettings({ ...schoolSettings, telephone: e.target.value })}
+                    className="w-full text-xs border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    placeholder="08033408522, 08058715879"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={schoolSettings.email}
+                    onChange={e => setSchoolSettings({ ...schoolSettings, email: e.target.value })}
+                    className="w-full text-xs border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    placeholder="attahfizul.itqan@gmail.com"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Current Academic Session
+                  </label>
+                  <input
+                    type="text"
+                    value={schoolSettings.currentSession}
+                    onChange={e =>
+                      setSchoolSettings({ ...schoolSettings, currentSession: e.target.value })
+                    }
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    placeholder="2025/2026"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Current Term
+                  </label>
+                  <select
+                    value={schoolSettings.currentTerm}
+                    onChange={e =>
+                      setSchoolSettings({ ...schoolSettings, currentTerm: e.target.value })
+                    }
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                  >
+                    <option value="1st Term">1st Term</option>
+                    <option value="2nd Term">2nd Term</option>
+                    <option value="3rd Term">3rd Term</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: CLASSES */}
+      {activeSection === 'classes' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Manage School Classes</h3>
+              <p className="text-xs text-slate-500">
+                Add, edit, or remove classes. Classes configured here dynamically appear in all dropdowns, student records, and reports.
+              </p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={newClassName}
+                onChange={e => setNewClassName(e.target.value)}
+                placeholder="New class name, e.g. JSS Three"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-48 sm:w-60 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={e => e.key === 'Enter' && handleAddClass()}
+              />
+              <button
+                onClick={handleAddClass}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Class</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-3">
+            {classes.map((cls, idx) => (
+              <div
+                key={cls.id}
+                className="flex items-center justify-between p-3 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-white transition"
+              >
+                <div className="flex items-center space-x-2.5">
+                  <span className="w-6 h-6 rounded bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center">
+                    {idx + 1}
+                  </span>
+                  <span className="text-sm font-semibold text-slate-900">{cls.name}</span>
+                </div>
+                <button
+                  onClick={() => handleDeleteClass(cls.id, cls.name)}
+                  className="text-slate-400 hover:text-red-600 p-1 transition"
+                  title="Delete class"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: SECTIONS */}
+      {activeSection === 'sections' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Manage Class Sections</h3>
+              <p className="text-xs text-slate-500">
+                Configure arms/sections e.g. A, B, C, Islamiyya, Arabic, Tahfiz.
+              </p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={newSectionName}
+                onChange={e => setNewSectionName(e.target.value)}
+                placeholder="New section, e.g. Tahfiz"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-48 sm:w-60 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={e => e.key === 'Enter' && handleAddSection()}
+              />
+              <button
+                onClick={handleAddSection}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Section</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3">
+            {sections.map(sec => (
+              <div
+                key={sec.id}
+                className="flex items-center justify-between p-3 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-white transition"
+              >
+                <span className="text-sm font-semibold text-slate-900">{sec.name}</span>
+                <button
+                  onClick={() => handleDeleteSection(sec.id, sec.name)}
+                  className="text-slate-400 hover:text-red-600 p-1 transition"
+                  title="Delete section"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: SUBJECTS */}
+      {activeSection === 'subjects' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Manage School Subjects</h3>
+              <p className="text-xs text-slate-500">
+                Configure subjects with their authentic Arabic and English titles.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={newSubjectName}
+                onChange={e => setNewSubjectName(e.target.value)}
+                placeholder="English Name (e.g. Hadith)"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-40 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <input
+                type="text"
+                dir="rtl"
+                value={newSubjectArabic}
+                onChange={e => setNewSubjectArabic(e.target.value)}
+                placeholder="Arabic Name (e.g. الحديث)"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-40 font-amiri focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+              <button
+                onClick={handleAddSubject}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Subject</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto pt-2">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 uppercase text-[11px]">
+                <tr>
+                  <th className="py-2.5 px-3">#</th>
+                  <th className="py-2.5 px-3">Subject Name (English)</th>
+                  <th className="py-2.5 px-3 text-right">Arabic Name (المادة)</th>
+                  <th className="py-2.5 px-3 text-center">Status</th>
+                  <th className="py-2.5 px-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {subjects.map((sub, idx) => (
+                  <tr key={sub.id} className="hover:bg-slate-50 transition">
+                    <td className="py-2.5 px-3 text-slate-400 font-mono">{idx + 1}</td>
+                    <td className="py-2.5 px-3 font-semibold text-slate-900">{sub.name}</td>
+                    <td className="py-2.5 px-3 font-amiri font-bold text-sm text-right text-slate-900">
+                      {sub.arabicName}
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <button
+                        onClick={() => handleToggleSubject(sub.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold transition ${
+                          sub.isActive
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-200 text-slate-600'
+                        }`}
+                      >
+                        {sub.isActive ? 'Active' : 'Inactive'}
+                      </button>
+                    </td>
+                    <td className="py-2.5 px-3 text-right">
+                      <button
+                        onClick={() => handleDeleteSubject(sub.id, sub.name)}
+                        className="text-slate-400 hover:text-red-600 transition p-1"
+                        title="Delete subject"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: GRADING & ASSESSMENT LIMITS */}
+      {activeSection === 'grading' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-6">
+          {/* Assessment Max Limits */}
+          <div className="border-b border-slate-200 pb-5">
+            <h3 className="text-sm font-bold text-slate-900 mb-1">
+              Cognitive Assessment Score Limits
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Configure the maximum points for 1st Continuous Assessment, 2nd Continuous Assessment, and Term Exam. The total auto-computes to 100%.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  1st C.A Maximum Score
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={schoolSettings.ca1Max}
+                    onChange={e =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        ca1Max: Number(e.target.value) || 0,
+                      })
+                    }
+                    className="w-full text-base font-bold border border-slate-300 rounded p-2 focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="text-xs font-bold text-slate-500">%</span>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  2nd C.A Maximum Score
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={schoolSettings.ca2Max}
+                    onChange={e =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        ca2Max: Number(e.target.value) || 0,
+                      })
+                    }
+                    className="w-full text-base font-bold border border-slate-300 rounded p-2 focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="text-xs font-bold text-slate-500">%</span>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Exam Maximum Score
+                </label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={schoolSettings.examMax}
+                    onChange={e =>
+                      setSchoolSettings({
+                        ...schoolSettings,
+                        examMax: Number(e.target.value) || 0,
+                      })
+                    }
+                    className="w-full text-base font-bold border border-slate-300 rounded p-2 focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="text-xs font-bold text-slate-500">%</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between text-xs font-semibold p-2.5 rounded bg-blue-50 text-blue-900 border border-blue-200">
+              <span>Combined Total Max:</span>
+              <span className="font-bold">
+                {Number(schoolSettings.ca1Max) +
+                  Number(schoolSettings.ca2Max) +
+                  Number(schoolSettings.examMax)}
+                %
+              </span>
+            </div>
+          </div>
+
+          {/* Grading Scale Table */}
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 mb-1">Grading Scale &amp; Remarks</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Configured grade details appear on every report sheet and class summary.
+            </p>
+
+            <table className="w-full text-xs text-left border border-slate-200 rounded-lg overflow-hidden">
+              <thead className="bg-slate-100 text-slate-700 font-bold uppercase text-[11px]">
+                <tr>
+                  <th className="py-2.5 px-3">Score Range</th>
+                  <th className="py-2.5 px-3 text-center">Grade Letter</th>
+                  <th className="py-2.5 px-3">Remark</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {gradingBoundaries.map((b, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50">
+                    <td className="py-2.5 px-3 font-mono font-semibold">
+                      {b.min} &ndash; {b.max}
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      <span className="px-2.5 py-0.5 rounded font-black bg-slate-900 text-white">
+                        {b.grade}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 font-medium text-slate-700">{b.remark}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 6: PSYCHOMOTOR ITEMS */}
+      {activeSection === 'psychomotor' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Psychomotor / Behavioral Domains</h3>
+              <p className="text-xs text-slate-500">
+                Traits assessed on the student report card (e.g. Attendance, Punctuality, Neatness, Attentiveness, Honesty, Helping Others, Politeness).
+              </p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={newPsychomotorName}
+                onChange={e => setNewPsychomotorName(e.target.value)}
+                placeholder="New trait e.g. Honesty"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-48 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                onKeyDown={e => e.key === 'Enter' && handleAddPsychomotor()}
+              />
+              <button
+                onClick={handleAddPsychomotor}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Item</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-3">
+            {psychomotorItems.map(p => (
+              <div
+                key={p.id}
+                className="flex items-center justify-between p-3 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-white transition"
+              >
+                <span className="text-sm font-semibold text-slate-900">{p.name}</span>
+                <button
+                  onClick={() => handleDeletePsychomotor(p.id)}
+                  className="text-slate-400 hover:text-red-600 p-1 transition"
+                  title="Delete item"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 7: BACKUP & RESET */}
+      {activeSection === 'backup' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-6">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 mb-1">
+              Database Backup, Restore &amp; Data Reset
+            </h3>
+            <p className="text-xs text-slate-500 mb-2">
+              Download complete local backups of all school settings, students, and assessment records, or restore from a previously saved file.
+            </p>
+            <div className="inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded bg-slate-100 text-slate-700 border border-slate-200">
+              <span>Last Data Backup: </span>
+              <strong className="ml-1 text-slate-900">
+                {schoolSettings.lastBackupAt
+                  ? new Date(schoolSettings.lastBackupAt).toLocaleString()
+                  : 'Not backed up yet'}
+              </strong>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="p-4 border border-slate-200 rounded-lg bg-slate-50 space-y-3">
+              <h4 className="text-xs font-bold uppercase text-slate-800">Export Backup</h4>
+              <p className="text-xs text-slate-600">
+                Download a complete JSON snapshot of all school records to your computer.
+              </p>
+              <button
+                onClick={handleExportBackup}
+                className="w-full bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold py-2 rounded transition flex items-center justify-center space-x-1.5"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export System Backup</span>
+              </button>
+            </div>
+
+            <div className="p-4 border border-slate-200 rounded-lg bg-slate-50 space-y-3">
+              <h4 className="text-xs font-bold uppercase text-slate-800">Restore Backup</h4>
+              <p className="text-xs text-slate-600">
+                Restore database from an exported JSON file.
+              </p>
+              <input
+                type="file"
+                ref={backupInputRef}
+                onChange={handleImportBackup}
+                accept=".json"
+                className="hidden"
+              />
+              <button
+                onClick={() => backupInputRef.current?.click()}
+                className="w-full bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-2 rounded transition flex items-center justify-center space-x-1.5"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Select Backup File</span>
+              </button>
+            </div>
+
+            <div className="p-4 border border-red-200 rounded-lg bg-red-50/50 space-y-3">
+              <h4 className="text-xs font-bold uppercase text-red-900">Reset to Defaults</h4>
+              <p className="text-xs text-red-700">
+                Reset everything back to sample data with At-Tahfizul Itqan settings and sample students.
+              </p>
+              <button
+                onClick={() => {
+                  if (window.confirm('Reset database to default sample data? This will reset all current records.')) {
+                    onResetDefaults();
+                    showNotification('Database reset to defaults successfully.');
+                  }
+                }}
+                className="w-full bg-red-700 hover:bg-red-800 text-white text-xs font-semibold py-2 rounded transition flex items-center justify-center space-x-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Reset to Sample Data</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
