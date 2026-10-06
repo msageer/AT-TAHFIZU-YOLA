@@ -35,7 +35,6 @@ import { ExcelManager } from './components/ExcelManager';
 import { UserManagement } from './components/UserManagement';
 import { AuditLogView } from './components/AuditLogView';
 import { Settings } from './components/Settings';
-import { OnboardingWizard } from './components/OnboardingWizard';
 
 export default function App() {
   const [db, setDb] = useState<AppDatabase>(() => loadDatabase());
@@ -43,7 +42,6 @@ export default function App() {
     getCurrentSessionUser()
   );
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
-  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
 
   // Navigation state passes
   const [selectedAssessmentTarget, setSelectedAssessmentTarget] = useState<{
@@ -394,39 +392,6 @@ export default function App() {
     updateDatabase({ ...db, sections: [...db.sections, ...newSections] });
   };
 
-  const handleCompleteOnboarding = (data: {
-    settings: SchoolSettings;
-    newClasses: ClassItem[];
-    newSections: SectionItem[];
-    importedStudents: Student[];
-  }) => {
-    const mergedStudents =
-      data.importedStudents.length > 0
-        ? [...data.importedStudents, ...db.students]
-        : db.students;
-
-    let updatedDb: AppDatabase = {
-      ...db,
-      settings: data.settings,
-      classes: data.newClasses,
-      sections: data.newSections,
-      students: mergedStudents,
-    };
-
-    if (currentUser) {
-      updatedDb = addAuditLog(
-        updatedDb,
-        currentUser,
-        'ONBOARDING_COMPLETED',
-        `Configured school profile and imported ${data.importedStudents.length} students`
-      );
-    }
-
-    updateDatabase(updatedDb);
-    setIsOnboardingOpen(false);
-    setActiveTab('dashboard');
-  };
-
   const handleResetDefaults = () => {
     const reset = resetDatabaseToDefault();
     setDb(reset);
@@ -483,7 +448,6 @@ export default function App() {
         settings={db.settings}
         currentUser={currentUser}
         onLogout={handleLogout}
-        onOpenOnboarding={isSuperAdmin ? () => setIsOnboardingOpen(true) : undefined}
       />
 
       {/* Main Container */}
@@ -494,7 +458,6 @@ export default function App() {
             currentUser={currentUser}
             setActiveTab={setActiveTab}
             onSelectAssessmentStudent={navigateToAssessment}
-            onOpenOnboarding={() => setIsOnboardingOpen(true)}
           />
         )}
 
@@ -603,15 +566,6 @@ export default function App() {
           />
         )}
       </main>
-
-      {/* Onboarding Wizard Modal */}
-      {isOnboardingOpen && isSuperAdmin && (
-        <OnboardingWizard
-          db={db}
-          onCompleteOnboarding={handleCompleteOnboarding}
-          onClose={() => setIsOnboardingOpen(false)}
-        />
-      )}
 
       {/* Footer */}
       <footer className="no-print bg-slate-900 text-slate-400 border-t border-slate-800 text-xs py-5 mt-auto">

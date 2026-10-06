@@ -22,7 +22,6 @@ interface DashboardProps {
   currentUser?: UserAccount;
   setActiveTab: (tab: NavigationTab) => void;
   onSelectAssessmentStudent?: (studentId: string, className: string, section: string) => void;
-  onOpenOnboarding: () => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -30,7 +29,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   currentUser,
   setActiveTab,
   onSelectAssessmentStudent,
-  onOpenOnboarding,
 }) => {
   const isTeacher = currentUser?.role === 'teacher';
   const teacherClass = currentUser?.assignedClass;
@@ -75,89 +73,85 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Empty School Prompt or Welcome Banner */}
-      {db.students.length === 0 ? (
-        <div className="bg-gradient-to-r from-blue-900 to-indigo-950 rounded-2xl p-6 sm:p-8 text-white shadow-md border border-blue-800">
-          <div className="max-w-2xl space-y-3">
-            <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-semibold border border-emerald-500/30">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Welcome to Your New School System</span>
-            </span>
-            <h2 className="text-2xl sm:text-3xl font-bold">Let&apos;s Set Up Your School</h2>
-            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              You don&apos;t have to enter hundreds of students one by one! The fastest way to start is by uploading your existing spreadsheet (.xlsx, .xls, .csv). Our system will auto-detect your columns and classes.
+      {/* Standard School Header */}
+      <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 rounded-xl p-6 text-white shadow-sm border border-slate-800">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-semibold px-2.5 py-0.5 rounded bg-emerald-700 text-emerald-100 font-amiri">
+                {db.settings.arabicSchoolName || 'التحفيظ والإتقان'}
+              </span>
+              <span className="text-xs text-slate-300">
+                {selectedSession} &bull; {selectedTerm}
+              </span>
+            </div>
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+              {db.settings.schoolName || 'Islamic School Management System'}
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
+              {db.settings.motto || 'شعارنا: خيركم من تعلم القرآن وعلمه'}
             </p>
-            <div className="flex flex-wrap gap-3 pt-2">
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {!isTeacher && (
               <button
-                onClick={onOpenOnboarding}
-                className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm px-5 py-2.5 rounded-xl transition shadow flex items-center space-x-2"
+                onClick={() => setActiveTab('import-export')}
+                className="bg-blue-800 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
               >
                 <Upload className="w-4 h-4" />
-                <span>Upload Student Spreadsheet</span>
+                <span>Import Spreadsheet</span>
               </button>
+            )}
+            {isTeacher && (
               <button
                 onClick={() => setActiveTab('students')}
-                className="bg-white/10 hover:bg-white/20 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl transition"
+                className="bg-blue-800 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
               >
-                Enter Students Manually
+                <Users className="w-4 h-4" />
+                <span>My Class Students</span>
               </button>
-            </div>
+            )}
+            <button
+              onClick={() => setActiveTab('assessment')}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+            >
+              <ClipboardCheck className="w-4 h-4" />
+              <span>Enter Marks</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('reports')}
+              className="bg-purple-700 hover:bg-purple-600 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+            >
+              <FileText className="w-4 h-4" />
+              <span>Reports</span>
+            </button>
           </div>
         </div>
-      ) : (
-        <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 rounded-xl p-6 text-white shadow-sm border border-slate-800">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center space-x-2">
-                <span className="text-xs font-semibold px-2.5 py-0.5 rounded bg-emerald-700 text-emerald-100 font-amiri">
-                  {db.settings.arabicSchoolName || 'التحفيظ والإتقان'}
-                </span>
-                <span className="text-xs text-slate-300">
-                  {selectedSession} &bull; {selectedTerm}
-                </span>
-              </div>
-              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
-                {db.settings.schoolName || 'Islamic School Management System'}
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-300 max-w-2xl">
-                {db.settings.motto || 'شعارنا: خيركم من تعلم القرآن وعلمه'}
-              </p>
-            </div>
+      </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {!isTeacher && (
-                <button
-                  onClick={() => setActiveTab('import-export')}
-                  className="bg-blue-800 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
-                >
-                  <Upload className="w-4 h-4" />
-                  <span>Import Spreadsheet</span>
-                </button>
-              )}
-              {isTeacher && (
-                <button
-                  onClick={() => setActiveTab('students')}
-                  className="bg-blue-800 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
-                >
-                  <Users className="w-4 h-4" />
-                  <span>My Class Students</span>
-                </button>
-              )}
-              <button
-                onClick={() => setActiveTab('assessment')}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
-              >
-                <ClipboardCheck className="w-4 h-4" />
-                <span>Enter Marks</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('reports')}
-                className="bg-purple-700 hover:bg-purple-600 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
-              >
-                <FileText className="w-4 h-4" />
-                <span>Reports</span>
-              </button>
-            </div>
+      {/* Notice if zero students enrolled */}
+      {db.students.length === 0 && (
+        <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center space-x-2">
+            <Users className="w-4 h-4 text-blue-600 flex-shrink-0" />
+            <span>
+              <strong>Student Directory Empty:</strong> Upload your student list spreadsheet (.xlsx / .csv) or click <strong>Students</strong> to enroll students.
+            </span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setActiveTab('import-export')}
+              className="px-3 py-1.5 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-lg transition shadow-sm text-xs"
+            >
+              Upload Spreadsheet
+            </button>
+            <button
+              onClick={() => setActiveTab('students')}
+              className="px-3 py-1.5 bg-white border border-blue-300 hover:bg-blue-50 text-blue-800 font-semibold rounded-lg transition text-xs"
+            >
+              Add Student
+            </button>
           </div>
         </div>
       )}

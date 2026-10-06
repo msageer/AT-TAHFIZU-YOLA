@@ -37,43 +37,102 @@ export const DEFAULT_PSYCHOMOTOR_ITEMS: PsychomotorItem[] = [
   { id: 'psy-7', name: 'Politeness' },
 ];
 
+export const DEFAULT_SUPER_ADMIN: UserAccount = {
+  id: 'usr-admin',
+  email: 'admin@school.edu',
+  username: 'admin',
+  fullName: 'Mallam Abubakar Lamido (Super Admin)',
+  phone: '08033408522',
+  passwordHash: 'admin123',
+  role: 'super_admin',
+  schoolId: 'school-main',
+  status: 'active',
+  createdAt: new Date().toISOString(),
+};
+
+export const DEFAULT_TEACHER_ACCOUNT: UserAccount = {
+  id: 'usr-teacher-1',
+  email: 'teacher@school.edu',
+  username: 'teacher',
+  fullName: 'Ustaza Aisha Muhammad Ardo',
+  phone: '08058715879',
+  passwordHash: 'teacher123',
+  role: 'teacher',
+  schoolId: 'school-main',
+  status: 'active',
+  assignedClass: 'Primary One',
+  assignedSection: 'A',
+  assignedSession: '2026/2027',
+  createdAt: new Date().toISOString(),
+};
+
+export const DEFAULT_STAFF_ACCOUNT: UserAccount = {
+  id: 'usr-staff-1',
+  email: 'staff@school.edu',
+  username: 'staff',
+  fullName: 'Ibrahim Sani (Exam Officer)',
+  phone: '08021112233',
+  passwordHash: 'staff123',
+  role: 'staff',
+  schoolId: 'school-main',
+  status: 'active',
+  permissions: ['students', 'assessment', 'reports', 'class-summary', 'attendance'],
+  createdAt: new Date().toISOString(),
+};
+
 /**
- * Returns a completely clean, EMPTY production database.
- * No hardcoded schools, classes, sections, students, subjects, or assessments!
+ * Returns clean production database with onboarding pre-completed and default admin ready.
  */
 export function getEmptyDatabase(): AppDatabase {
   return {
     schoolId: 'school-main',
     settings: {
       schoolId: 'school-main',
-      schoolName: '',
-      arabicSchoolName: '',
-      motto: '',
-      address: '',
-      telephone: '',
-      email: '',
+      schoolName: 'AT-TAHFIZU WAL ITQAN ISLAMIYYA',
+      arabicSchoolName: 'مدرسة التحفيظ والإتقان الإسلامية',
+      motto: 'شعارنا: خيركم من تعلم القرآن وعلمه',
+      address: 'Along Bypass Road, Lamido Zubairu Way, Yola',
+      telephone: '08033408522, 08058715879',
+      email: 'admin@school.edu',
       website: '',
-      currentSession: '',
-      currentTerm: '',
+      currentSession: '2026/2027',
+      currentTerm: '1st Term',
       logoUrl: '',
       ca1Max: 20,
       ca2Max: 20,
       examMax: 60,
-      isSetupComplete: false,
+      isSetupComplete: true, // Initial onboarding done once!
       useSections: true,
       lastBackupAt: undefined,
     },
-    classes: [],
-    sections: [],
-    subjects: [],
-    terms: [],
-    sessions: [],
+    classes: [
+      { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main' },
+      { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main' },
+      { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main' },
+      { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main' },
+    ],
+    sections: [
+      { id: 'sec-1', name: 'A', schoolId: 'school-main' },
+      { id: 'sec-2', name: 'B', schoolId: 'school-main' },
+    ],
+    subjects: [
+      { id: 'sub-1', name: "Qur'an", arabicName: 'القرآن الكريم', isActive: true, schoolId: 'school-main' },
+      { id: 'sub-2', name: 'Tauhid', arabicName: 'التوحيد', isActive: true, schoolId: 'school-main' },
+      { id: 'sub-3', name: "Qira'a", arabicName: 'القراءة', isActive: true, schoolId: 'school-main' },
+      { id: 'sub-4', name: 'Hadith', arabicName: 'الحديث النبوي', isActive: true, schoolId: 'school-main' },
+      { id: 'sub-5', name: 'Fiqh', arabicName: 'الفقه الإسلامي', isActive: true, schoolId: 'school-main' },
+      { id: 'sub-6', name: 'Arabic Language', arabicName: 'اللغة العربية', isActive: true, schoolId: 'school-main' },
+      { id: 'sub-7', name: 'English Studies', arabicName: 'اللغة الإنجليزية', isActive: true, schoolId: 'school-main' },
+      { id: 'sub-8', name: 'Mathematics', arabicName: 'الرياضيات', isActive: true, schoolId: 'school-main' },
+    ],
+    terms: ['1st Term', '2nd Term', '3rd Term'],
+    sessions: ['2025/2026', '2026/2027', '2027/2028'],
     gradingBoundaries: [...DEFAULT_GRADING_BOUNDARIES],
     psychomotorItems: [...DEFAULT_PSYCHOMOTOR_ITEMS],
     students: [],
     assessments: [],
     attendance: [],
-    users: [],
+    users: [DEFAULT_SUPER_ADMIN, DEFAULT_TEACHER_ACCOUNT, DEFAULT_STAFF_ACCOUNT],
     auditLogs: [],
   };
 }
@@ -94,11 +153,12 @@ export function loadDatabase(): AppDatabase {
     // Safety checks & fallbacks
     if (!parsed.schoolId) parsed.schoolId = 'school-main';
     if (!parsed.settings) parsed.settings = getEmptyDatabase().settings;
-    if (!parsed.classes) parsed.classes = [];
-    if (!parsed.sections) parsed.sections = [];
-    if (!parsed.subjects) parsed.subjects = [];
-    if (!parsed.terms) parsed.terms = [];
-    if (!parsed.sessions) parsed.sessions = [];
+    parsed.settings.isSetupComplete = true; // Onboarding is completed once
+    if (!parsed.classes) parsed.classes = getEmptyDatabase().classes;
+    if (!parsed.sections) parsed.sections = getEmptyDatabase().sections;
+    if (!parsed.subjects) parsed.subjects = getEmptyDatabase().subjects;
+    if (!parsed.terms || parsed.terms.length === 0) parsed.terms = ['1st Term', '2nd Term', '3rd Term'];
+    if (!parsed.sessions || parsed.sessions.length === 0) parsed.sessions = ['2025/2026', '2026/2027', '2027/2028'];
     if (!parsed.gradingBoundaries || parsed.gradingBoundaries.length === 0) {
       parsed.gradingBoundaries = [...DEFAULT_GRADING_BOUNDARIES];
     }
@@ -108,7 +168,9 @@ export function loadDatabase(): AppDatabase {
     if (!parsed.students) parsed.students = [];
     if (!parsed.assessments) parsed.assessments = [];
     if (!parsed.attendance) parsed.attendance = [];
-    if (!parsed.users) parsed.users = [];
+    if (!parsed.users || parsed.users.length === 0) {
+      parsed.users = [DEFAULT_SUPER_ADMIN, DEFAULT_TEACHER_ACCOUNT, DEFAULT_STAFF_ACCOUNT];
+    }
     if (!parsed.auditLogs) parsed.auditLogs = [];
 
     return parsed;

@@ -27,7 +27,6 @@ interface NavbarProps {
   settings: SchoolSettings;
   currentUser: UserAccount;
   onLogout: () => void;
-  onOpenOnboarding?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -36,7 +35,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   settings,
   currentUser,
   onLogout,
-  onOpenOnboarding,
 }) => {
   const isSuperAdmin = currentUser.role === 'super_admin';
   const isTeacher = currentUser.role === 'teacher';
@@ -219,18 +217,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
               <div className="mt-0.5">{getRoleBadge()}</div>
             </div>
-
-            {/* Quick Setup Onboarding button (Super Admin only) */}
-            {isSuperAdmin && onOpenOnboarding && (
-              <button
-                onClick={onOpenOnboarding}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition flex items-center space-x-1.5 shadow"
-                title="Open School Onboarding Wizard"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span className="hidden lg:inline">Quick Setup</span>
-              </button>
-            )}
 
             {/* Logout Button */}
             <button
