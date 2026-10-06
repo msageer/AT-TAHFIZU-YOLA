@@ -253,14 +253,13 @@ export function loadDatabase(): AppDatabase {
       parsed.attendance = [];
     }
 
-    // User Accounts: Purge only obsolete test admin credentials while preserving all user-created staff & teachers
+    // User Accounts: Purge only obsolete test admin credentials while preserving all user-created admins, staff & teachers
     const cleanedUsers = (parsed.users || []).filter(u => {
       const emailLower = (u.email || '').toLowerCase().trim();
       const usernameLower = (u.username || '').toLowerCase().trim();
       if (emailLower === 'admin@school.edu' || emailLower === 'admin@attahfiz.edu') return false;
       if (usernameLower === 'superadmin' && emailLower !== 'alaminkaigama@gmail.com') return false;
       if (u.id === 'usr-admin') return false;
-      if (u.role === 'super_admin' && emailLower !== 'alaminkaigama@gmail.com') return false;
       return true;
     });
 
@@ -358,7 +357,7 @@ export function getCurrentSessionUser(): UserAccount | null {
     if (
       emailLower === 'admin@school.edu' ||
       emailLower === 'admin@attahfiz.edu' ||
-      (user.role === 'super_admin' && emailLower !== 'alaminkaigama@gmail.com')
+      user.id === 'usr-admin'
     ) {
       localStorage.removeItem(AUTH_SESSION_KEY);
       return null;

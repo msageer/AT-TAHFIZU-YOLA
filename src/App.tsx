@@ -384,6 +384,70 @@ export default function App() {
     updateDatabase(updatedDb);
   };
 
+  const handleImportAssessmentSheet = (
+    newStudents: Student[],
+    newAssessments: AssessmentRecord[],
+    newAttendance: AttendanceRecord[],
+    detectedClasses: string[],
+    detectedSections: string[]
+  ) => {
+    // 1. Auto-enroll new students without duplicate IDs
+    const existingIds = new Set(db.students.map(s => s.id));
+    const studentsToAppend = newStudents.filter(s => !existingIds.has(s.id));
+    const mergedStudents = [...db.students, ...studentsToAppend];
+
+    // 2. Merge assessments and replace any matching by (studentId, session, term)
+    const assessmentMap = new Map<string, AssessmentRecord>();
+    db.assessments.forEach(a => assessmentMap.set(`${a.studentId}__${a.academicSession}__${a.term}`, a));
+    newAssessments.forEach(a => assessmentMap.set(`${a.studentId}__${a.academicSession}__${a.term}`, a));
+    const mergedAssessments = Array.from(assessmentMap.values());
+
+    // 3. Merge attendance
+    const attendanceMap = new Map<string, AttendanceRecord>();
+    (db.attendance || []).forEach(att => attendanceMap.set(`${att.studentId}__${att.academicSession}__${att.term}`, att));
+    newAttendance.forEach(att => attendanceMap.set(`${att.studentId}__${att.academicSession}__${att.term}`, att));
+    const mergedAttendance = Array.from(attendanceMap.values());
+
+    // 4. Auto-create any new classes or sections found in the sheet
+    const existingClassNames = new Set(db.classes.map(c => c.name.toLowerCase()));
+    const classesToAdd: ClassItem[] = detectedClasses
+      .filter(cn => cn && !existingClassNames.has(cn.toLowerCase()))
+      .map((cn, i) => ({
+        id: `cls-auto-${Date.now()}-${i}`,
+        name: cn,
+        order: db.classes.length + i + 1,
+        schoolId: db.schoolId,
+      }));
+
+    const existingSectionNames = new Set(db.sections.map(s => s.name.toLowerCase()));
+    const sectionsToAdd: SectionItem[] = detectedSections
+      .filter(sn => sn && !existingSectionNames.has(sn.toLowerCase()))
+      .map((sn, i) => ({
+        id: `sec-auto-${Date.now()}-${i}`,
+        name: sn,
+        schoolId: db.schoolId,
+      }));
+
+    let updatedDb: AppDatabase = {
+      ...db,
+      students: mergedStudents,
+      assessments: mergedAssessments,
+      attendance: mergedAttendance,
+      classes: [...db.classes, ...classesToAdd],
+      sections: [...db.sections, ...sectionsToAdd],
+    };
+
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'IMPORT_ASSESSMENT_SHEET',
+        `Imported Assessment Sheet: Auto-enrolled ${studentsToAppend.length} students and recorded ${newAssessments.length} assessment records`
+      );
+    }
+    updateDatabase(updatedDb);
+  };
+
   const handleAutoAddClasses = (newClasses: ClassItem[]) => {
     updateDatabase({ ...db, classes: [...db.classes, ...newClasses] });
   };
@@ -489,6 +553,7 @@ export default function App() {
             initialClass={selectedAssessmentTarget?.className}
             initialSection={selectedAssessmentTarget?.section}
             onSaveAssessment={handleSaveAssessment}
+            onImportAssessmentSheet={handleImportAssessmentSheet}
             setActiveTab={setActiveTab}
             onSelectReportStudent={navigateToReport}
           />
@@ -531,6 +596,7 @@ export default function App() {
           <ExcelManager
             db={db}
             onImportStudents={handleImportStudents}
+            onImportAssessmentSheet={handleImportAssessmentSheet}
             onAutoAddClasses={handleAutoAddClasses}
             onAutoAddSections={handleAutoAddSections}
           />

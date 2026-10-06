@@ -1,12 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   AppDatabase,
   AssessmentRecord,
   SubjectScore,
   NavigationTab,
   UserAccount,
+  Student,
+  AttendanceRecord,
 } from '../types';
 import { calculateGrade, rankAssessments } from '../utils/ranking';
+import {
+  downloadAssessmentSheetTemplate,
+  parseAndValidateAssessmentSpreadsheet,
+  AssessmentSheetImportResult,
+} from '../utils/excel';
 import {
   Save,
   CheckCircle,
@@ -17,6 +24,11 @@ import {
   User,
   Eye,
   Lock,
+  FileSpreadsheet,
+  Download,
+  Upload,
+  Sparkles,
+  X,
 } from 'lucide-react';
 
 interface AssessmentEntryProps {
@@ -26,6 +38,13 @@ interface AssessmentEntryProps {
   initialClass?: string;
   initialSection?: string;
   onSaveAssessment: (record: AssessmentRecord) => void;
+  onImportAssessmentSheet?: (
+    newStudents: Student[],
+    newAssessments: AssessmentRecord[],
+    newAttendance: AttendanceRecord[],
+    detectedClasses: string[],
+    detectedSections: string[]
+  ) => void;
   setActiveTab: (tab: NavigationTab) => void;
   onSelectReportStudent: (studentId: string) => void;
 }
@@ -37,6 +56,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
   initialClass,
   initialSection,
   onSaveAssessment,
+  onImportAssessmentSheet,
   setActiveTab,
   onSelectReportStudent,
 }) => {
@@ -103,6 +123,48 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
   const [notification, setNotification] = useState<{ text: string; type: 'success' | 'error' } | null>(
     null
   );
+
+  // Spreadsheet upload state
+  const [isUploadingSheet, setIsUploadingSheet] = useState(false);
+  const [sheetImportResult, setSheetImportResult] = useState<AssessmentSheetImportResult | null>(null);
+  const sheetFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDownloadClassTemplate = () => {
+    downloadAssessmentSheetTemplate(db, className, section);
+  };
+
+  const handleSheetFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingSheet(true);
+    setSheetImportResult(null);
+    try {
+      const result = await parseAndValidateAssessmentSpreadsheet(file, db, session, term, className, section);
+      setSheetImportResult(result);
+    } catch (err: any) {
+      alert(`Error reading assessment sheet: ${err.message || 'Invalid format'}`);
+    } finally {
+      setIsUploadingSheet(false);
+      if (sheetFileInputRef.current) sheetFileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmSheetImport = () => {
+    if (!sheetImportResult || !onImportAssessmentSheet) return;
+    onImportAssessmentSheet(
+      sheetImportResult.newStudentsToEnroll,
+      sheetImportResult.assessmentRecords,
+      sheetImportResult.attendanceRecords,
+      sheetImportResult.detectedClasses,
+      sheetImportResult.detectedSections
+    );
+    setNotification({
+      text: `Imported successfully! Auto-enrolled ${sheetImportResult.newStudentsToEnroll.length} new student(s) and recorded ${sheetImportResult.assessmentRecords.length} assessments.`,
+      type: 'success',
+    });
+    setSheetImportResult(null);
+  };
 
   // Auto-fill or initialize scores when student, session, or term changes
   useEffect(() => {
@@ -280,14 +342,41 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleDownloadClassTemplate}
+            className="bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+            title="Download Excel Assessment Template with Embedded Guards"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Template</span>
+          </button>
+
+          <input
+            type="file"
+            ref={sheetFileInputRef}
+            onChange={handleSheetFileChange}
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+          />
+
+          <button
+            onClick={() => sheetFileInputRef.current?.click()}
+            disabled={isUploadingSheet}
+            className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+            title="Upload filled Assessment Sheet (Auto-enrolls new students)"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>{isUploadingSheet ? 'Reading...' : 'Upload Sheet'}</span>
+          </button>
+
           {selectedStudent && (
             <button
               onClick={() => onSelectReportStudent(selectedStudent.studentId)}
               className="bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5"
             >
               <Eye className="w-3.5 h-3.5" />
-              <span>Preview Report</span>
+              <span>Preview</span>
             </button>
           )}
 
@@ -808,6 +897,154 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
           <span>Save Assessment &amp; Recalculate Class Ranks</span>
         </button>
       </div>
+
+      {/* MODAL: ASSESSMENT SHEET IMPORT PREVIEW & AUTO-ENROLL CONFIRMATION */}
+      {sheetImportResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 relative animate-in fade-in zoom-in-95 space-y-4 max-h-[90vh] flex flex-col">
+            <button
+              onClick={() => setSheetImportResult(null)}
+              className="absolute right-4 top-4 text-slate-400 hover:text-slate-700"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <div className="flex items-center space-x-2 text-blue-900 mb-1">
+                <FileSpreadsheet className="w-5 h-5" />
+                <h3 className="text-base font-bold">Assessment Sheet Upload Preview</h3>
+              </div>
+              <p className="text-xs text-slate-500">
+                Verify auto-enrolled students and assessment marks before adding to the portal.
+              </p>
+            </div>
+
+            {/* Statistic Badges */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-center">
+                <span className="text-[10px] font-bold text-slate-500 uppercase block">Rows Read</span>
+                <span className="text-lg font-black text-slate-900">{sheetImportResult.totalRows}</span>
+              </div>
+
+              <div className="p-2.5 bg-emerald-50 border border-emerald-300 rounded-xl text-center ring-2 ring-emerald-500/20">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase block">
+                  ★ Auto-Enroll
+                </span>
+                <span className="text-lg font-black text-emerald-700">
+                  +{sheetImportResult.newStudentsToEnroll.length}
+                </span>
+                <span className="text-[9px] text-emerald-600 block">New Students</span>
+              </div>
+
+              <div className="p-2.5 bg-blue-50 border border-blue-200 rounded-xl text-center">
+                <span className="text-[10px] font-bold text-blue-700 uppercase block">Existing</span>
+                <span className="text-lg font-black text-blue-800">
+                  {sheetImportResult.existingStudentsMatched.length}
+                </span>
+                <span className="text-[9px] text-blue-600 block">Matched</span>
+              </div>
+
+              <div className="p-2.5 bg-purple-50 border border-purple-200 rounded-xl text-center">
+                <span className="text-[10px] font-bold text-purple-700 uppercase block">Assessments</span>
+                <span className="text-lg font-black text-purple-800">
+                  {sheetImportResult.assessmentRecords.length}
+                </span>
+                <span className="text-[9px] text-purple-600 block">Ranked</span>
+              </div>
+            </div>
+
+            {/* Informative Auto-Enroll Callout */}
+            {sheetImportResult.newStudentsToEnroll.length > 0 && (
+              <div className="p-3 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs text-emerald-950 space-y-1">
+                <div className="font-bold flex items-center space-x-1.5 text-emerald-900">
+                  <Sparkles className="w-4 h-4 text-emerald-600" />
+                  <span>
+                    {sheetImportResult.newStudentsToEnroll.length} New Student(s) Will Be Automatically Enrolled:
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-800 leading-relaxed">
+                  These students were found in your sheet but not in the database. Clicking &ldquo;Confirm &amp; Import&rdquo; will automatically create them as active students. You can complete their profile (parents, phone, DOB, address) anytime later under <strong>Students</strong>.
+                </p>
+              </div>
+            )}
+
+            {/* Table of Students & Scores */}
+            <div className="border border-slate-200 rounded-xl overflow-hidden flex-1 overflow-y-auto max-h-56">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-700 font-semibold uppercase text-[10px] tracking-wider sticky top-0 border-b border-slate-200">
+                  <tr>
+                    <th className="py-2 px-3">Student Name</th>
+                    <th className="py-2 px-3">Status</th>
+                    <th className="py-2 px-3">Class &amp; Arm</th>
+                    <th className="py-2 px-3 text-center">Subjects</th>
+                    <th className="py-2 px-3 text-center">Average</th>
+                    <th className="py-2 px-3 text-center">Rank</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {sheetImportResult.assessmentRecords.map((rec, idx) => {
+                    const isNew = sheetImportResult.newStudentsToEnroll.some(s => s.studentId === rec.studentId);
+                    const stu =
+                      sheetImportResult.newStudentsToEnroll.find(s => s.studentId === rec.studentId) ||
+                      sheetImportResult.existingStudentsMatched.find(s => s.studentId === rec.studentId) ||
+                      db.students.find(s => s.studentId === rec.studentId);
+
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="py-2 px-3">
+                          <div className="font-bold text-slate-900">{stu?.name || rec.studentId}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            {stu?.admissionNumber || stu?.studentId}
+                          </div>
+                        </td>
+                        <td className="py-2 px-3">
+                          {isNew ? (
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              <span>★ Auto-Enroll</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700">
+                              <span>Existing</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          {rec.className} {rec.section ? `(${rec.section})` : ''}
+                        </td>
+                        <td className="py-2 px-3 text-center">{rec.subjectScores.length}</td>
+                        <td className="py-2 px-3 text-center font-bold text-blue-700">{rec.finalAverage}%</td>
+                        <td className="py-2 px-3 text-center font-bold text-emerald-700">
+                          {rec.finalPosition || '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setSheetImportResult(null)}
+                className="text-xs font-semibold px-4 py-2 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={handleConfirmSheetImport}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 px-5 rounded-lg transition shadow flex items-center space-x-2"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>
+                  Confirm &amp; Import (+{sheetImportResult.newStudentsToEnroll.length} Students Auto-Enrolled)
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
