@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   loadDatabase,
   saveDatabase,
@@ -7,6 +7,10 @@ import {
   setCurrentSessionUser,
   addAuditLog,
 } from './storage/db';
+import {
+  setupRealtimeSync,
+  syncDatabaseToFirestore,
+} from './storage/firebase';
 import {
   AppDatabase,
   Student,
@@ -42,6 +46,20 @@ export default function App() {
     getCurrentSessionUser()
   );
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('syncing');
+
+  // Real-time multi-device synchronization across devices and users
+  useEffect(() => {
+    const unsub = setupRealtimeSync(
+      db,
+      remoteDb => {
+        setDb(remoteDb);
+        saveDatabase(remoteDb);
+      },
+      status => setCloudSyncStatus(status)
+    );
+    return () => unsub();
+  }, []);
 
   // Navigation state passes
   const [selectedAssessmentTarget, setSelectedAssessmentTarget] = useState<{
@@ -52,10 +70,13 @@ export default function App() {
 
   const [selectedReportStudentId, setSelectedReportStudentId] = useState<string | null>(null);
 
-  // Synchronize state with persistent storage
+  // Synchronize state with persistent storage and cloud
   const updateDatabase = (newDb: AppDatabase) => {
     setDb(newDb);
     saveDatabase(newDb);
+    syncDatabaseToFirestore(newDb).catch(err => {
+      console.error('Multi-device cloud sync error:', err);
+    });
   };
 
   // ==========================================
@@ -510,6 +531,7 @@ export default function App() {
         settings={db.settings}
         currentUser={currentUser}
         onLogout={handleLogout}
+        syncStatus={cloudSyncStatus}
       />
 
       {/* Main Container */}

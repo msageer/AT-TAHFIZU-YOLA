@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Health check and connection validation test document
+    match /test/connection {
+      allow read, write: if true;
+    }
+
+    match /schools/{schoolId} {
+      allow read, write: if isValidId(schoolId);
+
+      match /students/{studentId} {
+        allow get, write: if isValidId(schoolId) && isValidId(studentId);
+        allow list: if isValidId(schoolId);
+      }
+
+      match /assessments/{assessmentId} {
+        allow get, write: if isValidId(schoolId) && isValidId(assessmentId);
+        allow list: if isValidId(schoolId);
+      }
+
+      match /attendance/{attendanceId} {
+        allow get, write: if isValidId(schoolId) && isValidId(attendanceId);
+        allow list: if isValidId(schoolId);
+      }
+
+      match /users/{userId} {
+        allow get, write: if isValidId(schoolId) && isValidId(userId);
+        allow list: if isValidId(schoolId);
+      }
+
+      match /auditLogs/{logId} {
+        allow get, write: if isValidId(schoolId) && isValidId(logId);
+        allow list: if isValidId(schoolId);
+      }
+
+      match /{subCollection}/{docId} {
+        allow get, write: if isValidId(schoolId) && isValidId(subCollection) && isValidId(docId);
+        allow list: if isValidId(schoolId) && isValidId(subCollection);
+      }
+    }
+  }
+}

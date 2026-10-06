@@ -1,0 +1,116 @@
+{
+  "entities": {
+    "School": {
+      "title": "School",
+      "description": "School settings, academic configuration, classes, and subjects",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "schoolName": { "type": "string", "maxLength": 200 },
+        "arabicSchoolName": { "type": "string", "maxLength": 200 },
+        "currentSession": { "type": "string", "maxLength": 30 },
+        "currentTerm": { "type": "string", "maxLength": 30 },
+        "updatedAt": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "schoolName"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Registered pupil profile and enrollment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 64 },
+        "admissionNumber": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 200 },
+        "className": { "type": "string", "maxLength": 100 },
+        "section": { "type": "string", "maxLength": 50 },
+        "gender": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["id", "name", "className", "status"]
+    },
+    "Assessment": {
+      "title": "Assessment",
+      "description": "Academic assessment and examination record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 64 },
+        "academicSession": { "type": "string", "maxLength": 30 },
+        "term": { "type": "string", "maxLength": 30 },
+        "className": { "type": "string", "maxLength": 100 },
+        "section": { "type": "string", "maxLength": 50 },
+        "totalScore": { "type": "number" },
+        "finalAverage": { "type": "number" }
+      },
+      "required": ["id", "studentId", "academicSession", "term", "className"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Student attendance record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 64 },
+        "academicSession": { "type": "string", "maxLength": 30 },
+        "term": { "type": "string", "maxLength": 30 },
+        "daysOpened": { "type": "number" },
+        "daysPresent": { "type": "number" }
+      },
+      "required": ["id", "studentId", "academicSession", "term"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Portal user account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 120 },
+        "fullName": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "maxLength": 30 },
+        "status": { "type": "string", "maxLength": 20 }
+      },
+      "required": ["id", "email", "fullName", "role", "status"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Audit trail entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "userName": { "type": "string", "maxLength": 150 },
+        "action": { "type": "string", "maxLength": 100 },
+        "timestamp": { "type": "string", "maxLength": 60 }
+      },
+      "required": ["id", "userId", "action", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": {
+      "schema": "School",
+      "description": "Central school data and settings"
+    },
+    "/schools/{schoolId}/students/{studentId}": {
+      "schema": "Student",
+      "description": "Student records within the school"
+    },
+    "/schools/{schoolId}/assessments/{assessmentId}": {
+      "schema": "Assessment",
+      "description": "Assessment records within the school"
+    },
+    "/schools/{schoolId}/attendance/{attendanceId}": {
+      "schema": "Attendance",
+      "description": "Attendance records within the school"
+    },
+    "/schools/{schoolId}/users/{userId}": {
+      "schema": "User",
+      "description": "User accounts within the school"
+    },
+    "/schools/{schoolId}/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Audit log entries within the school"
+    }
+  }
+}

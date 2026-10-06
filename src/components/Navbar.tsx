@@ -16,6 +16,8 @@ import {
   LogOut,
   ShieldAlert,
   ChevronDown,
+  Cloud,
+  RefreshCw,
 } from 'lucide-react';
 import { SchoolSettings, NavigationTab, UserAccount } from '../types';
 
@@ -27,6 +29,7 @@ interface NavbarProps {
   settings: SchoolSettings;
   currentUser: UserAccount;
   onLogout: () => void;
+  syncStatus?: 'synced' | 'syncing' | 'offline' | 'error';
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -35,6 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   settings,
   currentUser,
   onLogout,
+  syncStatus = 'synced',
 }) => {
   const isSuperAdmin = currentUser.role === 'super_admin';
   const isTeacher = currentUser.role === 'teacher';
@@ -210,6 +214,29 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           <div className="flex items-center space-x-2 sm:space-x-3">
+            {/* Live Cloud Multi-Device Sync Indicator */}
+            <div
+              className="hidden lg:flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-800/90 border border-slate-700/80 text-slate-300 shadow-xs"
+              title="Real-time multi-device cloud synchronization across all devices and phones"
+            >
+              {syncStatus === 'syncing' ? (
+                <>
+                  <RefreshCw className="w-3 h-3 text-amber-400 animate-spin" />
+                  <span className="text-amber-300">Syncing...</span>
+                </>
+              ) : syncStatus === 'offline' ? (
+                <>
+                  <Cloud className="w-3 h-3 text-slate-400" />
+                  <span className="text-slate-400">Offline Cache</span>
+                </>
+              ) : (
+                <>
+                  <Cloud className="w-3 h-3 text-emerald-400" />
+                  <span className="text-emerald-300">Multi-Device Live Sync</span>
+                </>
+              )}
+            </div>
+
             {/* User Profile & Role Info */}
             <div className="hidden md:flex flex-col items-end text-right">
               <span className="text-xs font-bold text-slate-100 line-clamp-1">
