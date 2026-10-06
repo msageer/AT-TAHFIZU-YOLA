@@ -227,15 +227,22 @@ export default function App() {
     updateDatabase(updatedDb);
   };
 
-  const handleDeleteStudent = (studentInternalId: string) => {
-    const targetStudent = db.students.find(s => s.id === studentInternalId);
-    const updatedStudents = db.students.filter(s => s.id !== studentInternalId);
-    const updatedAssessments = targetStudent
-      ? db.assessments.filter(a => a.studentId !== targetStudent.studentId)
-      : db.assessments;
-    const updatedAttendance = targetStudent
-      ? (db.attendance || []).filter(a => a.studentId !== targetStudent.studentId)
-      : db.attendance;
+  const handleDeleteStudent = (identifier: string) => {
+    const targetStudent = db.students.find(
+      s => s.id === identifier || s.studentId === identifier
+    );
+    const targetId = targetStudent?.id || identifier;
+    const targetStudentId = targetStudent?.studentId || identifier;
+
+    const updatedStudents = db.students.filter(
+      s => s.id !== targetId && s.studentId !== targetStudentId
+    );
+    const updatedAssessments = db.assessments.filter(
+      a => a.studentId !== targetStudentId && a.studentId !== targetId
+    );
+    const updatedAttendance = (db.attendance || []).filter(
+      a => a.studentId !== targetStudentId && a.studentId !== targetId
+    );
 
     let updatedDb: AppDatabase = {
       ...db,
@@ -255,8 +262,51 @@ export default function App() {
     updateDatabase(updatedDb);
 
     // Explicitly delete from cloud Firestore so it doesn't resurrect on snapshot
-    deleteStudentFromFirestore(studentInternalId, targetStudent?.studentId).catch(err => {
+    deleteStudentFromFirestore(targetId, targetStudentId).catch(err => {
       console.error('Failed to delete student from cloud:', err);
+    });
+  };
+
+  const handleBatchDeleteStudents = (identifiers: string[]) => {
+    if (!identifiers || identifiers.length === 0) return;
+    const idSet = new Set(identifiers);
+    const targetStudents = db.students.filter(
+      s => idSet.has(s.id) || idSet.has(s.studentId)
+    );
+    const targetIdSet = new Set(targetStudents.map(s => s.id).concat(identifiers));
+    const targetStudentIdSet = new Set(targetStudents.map(s => s.studentId).concat(identifiers));
+
+    const updatedStudents = db.students.filter(
+      s => !targetIdSet.has(s.id) && !targetStudentIdSet.has(s.studentId)
+    );
+    const updatedAssessments = db.assessments.filter(
+      a => !targetStudentIdSet.has(a.studentId) && !targetIdSet.has(a.studentId)
+    );
+    const updatedAttendance = (db.attendance || []).filter(
+      a => !targetStudentIdSet.has(a.studentId) && !targetIdSet.has(a.studentId)
+    );
+
+    let updatedDb: AppDatabase = {
+      ...db,
+      students: updatedStudents,
+      assessments: updatedAssessments,
+      attendance: updatedAttendance,
+    };
+
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'BATCH_DELETE_STUDENTS',
+        `Batch deleted ${targetStudents.length || identifiers.length} student records`
+      );
+    }
+    updateDatabase(updatedDb);
+
+    targetStudents.forEach(ts => {
+      deleteStudentFromFirestore(ts.id, ts.studentId).catch(err => {
+        console.error('Failed to delete student from cloud:', err);
+      });
     });
   };
 
@@ -563,6 +613,7 @@ export default function App() {
             currentUser={currentUser}
             onSaveStudent={handleSaveStudent}
             onDeleteStudent={handleDeleteStudent}
+            onBatchDeleteStudents={handleBatchDeleteStudents}
             setActiveTab={setActiveTab}
             onSelectAssessmentStudent={navigateToAssessment}
             onSelectReportStudent={navigateToReport}

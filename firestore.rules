@@ -7,7 +7,7 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 150;
     }
 
     // Health check and connection validation test document
@@ -18,34 +18,8 @@ service cloud.firestore {
     match /schools/{schoolId} {
       allow read, write: if isValidId(schoolId);
 
-      match /students/{studentId} {
-        allow get, write: if isValidId(schoolId) && isValidId(studentId);
-        allow list: if isValidId(schoolId);
-      }
-
-      match /assessments/{assessmentId} {
-        allow get, write: if isValidId(schoolId) && isValidId(assessmentId);
-        allow list: if isValidId(schoolId);
-      }
-
-      match /attendance/{attendanceId} {
-        allow get, write: if isValidId(schoolId) && isValidId(attendanceId);
-        allow list: if isValidId(schoolId);
-      }
-
-      match /users/{userId} {
-        allow get, write: if isValidId(schoolId) && isValidId(userId);
-        allow list: if isValidId(schoolId);
-      }
-
-      match /auditLogs/{logId} {
-        allow get, write: if isValidId(schoolId) && isValidId(logId);
-        allow list: if isValidId(schoolId);
-      }
-
-      match /{subCollection}/{docId} {
-        allow get, write: if isValidId(schoolId) && isValidId(subCollection) && isValidId(docId);
-        allow list: if isValidId(schoolId) && isValidId(subCollection);
+      match /{allSubcollections=**} {
+        allow read, write: if isValidId(schoolId);
       }
     }
   }

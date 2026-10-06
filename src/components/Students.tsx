@@ -23,6 +23,7 @@ interface StudentsProps {
   currentUser?: UserAccount;
   onSaveStudent: (student: Student) => void;
   onDeleteStudent: (studentId: string) => void;
+  onBatchDeleteStudents?: (studentIds: string[]) => void;
   setActiveTab: (tab: NavigationTab) => void;
   onSelectAssessmentStudent: (studentId: string, className: string, section: string) => void;
   onSelectReportStudent: (studentId: string) => void;
@@ -33,6 +34,7 @@ export const Students: React.FC<StudentsProps> = ({
   currentUser,
   onSaveStudent,
   onDeleteStudent,
+  onBatchDeleteStudents,
   setActiveTab,
   onSelectAssessmentStudent,
   onSelectReportStudent,
@@ -47,6 +49,9 @@ export const Students: React.FC<StudentsProps> = ({
   const [filterSection, setFilterSection] = useState(isTeacher && teacherSection ? teacherSection : 'ALL');
   const [filterGender, setFilterGender] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('Active');
+
+  // Multi-selection state for batch actions
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
 
   // Modal State
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -214,8 +219,20 @@ export const Students: React.FC<StudentsProps> = ({
       return;
     }
 
-    onSaveStudent(studentToSave);
-    setIsFormOpen(false);
+    // Confirmation pop-up for registering a new student
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm New Student Registration',
+      message: `Are you sure you want to register new student "${studentToSave.name}" in ${studentToSave.className} (${studentToSave.section})?`,
+      details: `Student ID: ${studentToSave.studentId} • Admission No: ${studentToSave.admissionNumber} • Gender: ${studentToSave.gender}`,
+      variant: 'primary',
+      confirmText: 'Yes, Register Student',
+      onConfirm: () => {
+        onSaveStudent(studentToSave);
+        setIsFormOpen(false);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   // Trigger Delete Confirmation Pop-up Modal
@@ -223,19 +240,63 @@ export const Students: React.FC<StudentsProps> = ({
     setConfirmModalConfig({
       isOpen: true,
       title: 'Confirm Student Deletion',
-      message: `Are you sure you want to delete the student record for "${student.name}"? This will permanently remove all associated assessment scores and attendance history.`,
+      message: `Are you sure you want to permanently delete the student record for "${student.name}"? This will permanently remove all associated assessment scores and attendance history. Do you want to proceed?`,
       details: `Student: ${student.name} • Class: ${student.className} (${student.section}) • ID: ${student.studentId} • Admission: ${student.admissionNumber}`,
       variant: 'danger',
       confirmText: 'Yes, Delete Student',
       cancelText: 'Cancel',
       onConfirm: () => {
-        onDeleteStudent(student.id);
-        if (selectedStudentForProfile?.id === student.id) {
+        onDeleteStudent(student.id || student.studentId);
+        if (
+          selectedStudentForProfile?.id === student.id ||
+          selectedStudentForProfile?.studentId === student.studentId
+        ) {
           setSelectedStudentForProfile(null);
         }
+        setSelectedStudentIds(prev => prev.filter(id => id !== student.id && id !== student.studentId));
         setConfirmModalConfig(null);
       },
     });
+  };
+
+  // Trigger Batch Delete Confirmation Pop-up Modal
+  const handleBatchDeleteClick = () => {
+    if (selectedStudentIds.length === 0) return;
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Batch Student Deletion',
+      message: `Are you sure you want to permanently delete ${selectedStudentIds.length} selected student records? This will also remove all their assessment marks and attendance history. Do you want to proceed?`,
+      details: `Total selected for deletion: ${selectedStudentIds.length} students`,
+      variant: 'danger',
+      confirmText: `Yes, Delete ${selectedStudentIds.length} Students`,
+      cancelText: 'Cancel',
+      onConfirm: () => {
+        if (onBatchDeleteStudents) {
+          onBatchDeleteStudents(selectedStudentIds);
+        } else {
+          selectedStudentIds.forEach(id => onDeleteStudent(id));
+        }
+        if (selectedStudentForProfile && selectedStudentIds.includes(selectedStudentForProfile.id)) {
+          setSelectedStudentForProfile(null);
+        }
+        setSelectedStudentIds([]);
+        setConfirmModalConfig(null);
+      },
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    if (selectedStudentIds.length === filteredStudents.length && filteredStudents.length > 0) {
+      setSelectedStudentIds([]);
+    } else {
+      setSelectedStudentIds(filteredStudents.map(s => s.id));
+    }
+  };
+
+  const handleToggleSelectStudent = (id: string) => {
+    setSelectedStudentIds(prev =>
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
   };
 
   return (
@@ -351,12 +412,54 @@ export const Students: React.FC<StudentsProps> = ({
         </div>
       </div>
 
+      {/* Multi-Selection Batch Actions Toolbar */}
+      {selectedStudentIds.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-sm animate-in fade-in">
+          <div className="flex items-center space-x-2 text-xs font-semibold text-red-900">
+            <span className="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs font-bold">
+              {selectedStudentIds.length}
+            </span>
+            <span>
+              {selectedStudentIds.length} student{selectedStudentIds.length > 1 ? 's' : ''} selected
+            </span>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setSelectedStudentIds([])}
+              className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg transition"
+            >
+              Deselect All
+            </button>
+            <button
+              onClick={handleBatchDeleteClick}
+              className="px-3.5 py-1.5 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-lg transition flex items-center space-x-1.5 shadow-xs"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected ({selectedStudentIds.length})</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Student Records Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs sm:text-sm">
             <thead className="bg-slate-50 text-slate-700 border-b border-slate-200 font-semibold uppercase text-[11px] tracking-wider">
               <tr>
+                <th className="py-3 px-3 w-10 text-center">
+                  <input
+                    type="checkbox"
+                    checked={
+                      filteredStudents.length > 0 &&
+                      selectedStudentIds.length === filteredStudents.length
+                    }
+                    onChange={handleToggleSelectAll}
+                    aria-label="Select all students"
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </th>
                 <th className="py-3 px-4">Student ID / Adm</th>
                 <th className="py-3 px-4">Student Name</th>
                 <th className="py-3 px-4">Class &amp; Arm</th>
@@ -369,7 +472,7 @@ export const Students: React.FC<StudentsProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                  <td colSpan={8} className="py-12 text-center text-slate-400">
                     <UserCheck className="w-10 h-10 mx-auto mb-2 text-slate-300" />
                     <p className="font-semibold text-slate-600">No students match your filter criteria.</p>
                     <p className="text-xs text-slate-400 mt-1">Try clearing filters or add a new student.</p>
@@ -377,12 +480,31 @@ export const Students: React.FC<StudentsProps> = ({
                 </tr>
               ) : (
                 filteredStudents.map(student => {
+                  const isSelected = selectedStudentIds.includes(student.id);
                   return (
                     <tr
                       key={student.id}
-                      className="hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                      className={`hover:bg-slate-50/80 transition-colors cursor-pointer group ${
+                        isSelected ? 'bg-blue-50/50' : ''
+                      }`}
                       onClick={() => setSelectedStudentForProfile(student)}
                     >
+                      <td
+                        className="py-3 px-3 text-center"
+                        onClick={e => {
+                          e.stopPropagation();
+                          handleToggleSelectStudent(student.id);
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelectStudent(student.id)}
+                          aria-label={`Select student ${student.name}`}
+                          className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </td>
+
                       <td className="py-3 px-4 font-mono text-xs">
                         <div className="font-bold text-slate-900">{student.studentId}</div>
                         <div className="text-slate-400 text-[10px]">{student.admissionNumber}</div>
@@ -475,7 +597,7 @@ export const Students: React.FC<StudentsProps> = ({
                         </button>
                         <button
                           onClick={() => handleDeleteClick(student)}
-                          className="p-1.5 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded transition"
+                          className="p-1.5 text-red-500 hover:text-white hover:bg-red-600 rounded transition"
                           title="Delete Student"
                         >
                           <Trash2 className="w-4 h-4" />

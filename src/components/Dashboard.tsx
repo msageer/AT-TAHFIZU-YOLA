@@ -14,8 +14,14 @@ import {
   ArrowUpRight,
   Sparkles,
   Upload,
+  BarChart3,
+  TrendingUp,
+  Award,
+  Info,
+  ChevronDown,
 } from 'lucide-react';
 import { AppDatabase, NavigationTab, UserAccount } from '../types';
+import { computeGpaDistribution, PerformanceBucket } from '../utils/ranking';
 
 interface DashboardProps {
   db: AppDatabase;
@@ -70,6 +76,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const attendanceIssues = (db.attendance || []).filter(
     a => a.academicSession === selectedSession && a.term === selectedTerm && a.daysAbsent > 5
   ).length;
+
+  // Performance Distribution State & Calculations for Bar Chart
+  const [chartTermScope, setChartTermScope] = useState<'session' | 'term'>('session');
+  const [selectedBucketId, setSelectedBucketId] = useState<string | null>(null);
+
+  const sessionChartAssessments = db.assessments.filter(a => {
+    if (a.academicSession !== selectedSession) return false;
+    if (chartTermScope === 'term' && a.term !== selectedTerm) return false;
+    if (isTeacher && teacherClass && a.className !== teacherClass) return false;
+    if (isTeacher && teacherSection && a.section !== teacherSection) return false;
+    if (!isTeacher && selectedClass !== 'ALL' && a.className !== selectedClass) return false;
+    return true;
+  });
+
+  const distributionSummary = computeGpaDistribution(sessionChartAssessments, db.students);
+  const maxBucketCount = Math.max(
+    1,
+    ...distributionSummary.buckets.map(b => b.count)
+  );
+
+  const activeBucket = distributionSummary.buckets.find(b => b.id === selectedBucketId);
 
   return (
     <div className="space-y-6">
@@ -289,6 +316,301 @@ export const Dashboard: React.FC<DashboardProps> = ({
             {attendanceIssues > 0 ? 'Students absent > 5 days' : 'Regular school attendance'}
           </p>
         </div>
+      </div>
+
+      {/* VISUAL DASHBOARD SUMMARY: STUDENT PERFORMANCE DISTRIBUTION (GPA RANGES) */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-6">
+        {/* Chart Header & Controls */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          <div className="flex items-start space-x-3">
+            <div className="p-2.5 rounded-xl bg-blue-50 text-blue-700 border border-blue-100 mt-0.5">
+              <BarChart3 className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                  Student Performance Distribution (GPA Ranges)
+                </h3>
+                <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  4.00 GPA Scale
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Session: <strong className="text-slate-700">{selectedSession}</strong> &bull;{' '}
+                {chartTermScope === 'session' ? 'Full Session Aggregate' : selectedTerm} &bull;{' '}
+                {selectedClass === 'ALL' ? 'All Classes' : selectedClass}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold">
+              <button
+                onClick={() => setChartTermScope('session')}
+                className={`px-3 py-1.5 rounded-md transition ${
+                  chartTermScope === 'session'
+                    ? 'bg-white text-blue-700 font-bold shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Full Session Avg
+              </button>
+              <button
+                onClick={() => setChartTermScope('term')}
+                className={`px-3 py-1.5 rounded-md transition ${
+                  chartTermScope === 'term'
+                    ? 'bg-white text-blue-700 font-bold shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {selectedTerm}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setActiveTab('reports')}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition flex items-center space-x-1"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Full Broadsheet</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Statistical Summary Strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+              Average GPA
+            </span>
+            <div className="flex items-baseline space-x-1.5 mt-1">
+              <span className="text-2xl font-bold text-slate-900">
+                {distributionSummary.totalAssessed > 0
+                  ? distributionSummary.averageGpa.toFixed(2)
+                  : '-'}
+              </span>
+              <span className="text-xs text-slate-400 font-medium">/ 4.00</span>
+            </div>
+            <span className="text-[11px] text-slate-500 mt-0.5 block">
+              Mean: {distributionSummary.averageScore}% overall
+            </span>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-100">
+            <span className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider block">
+              Highest GPA
+            </span>
+            <div className="flex items-baseline space-x-1.5 mt-1">
+              <span className="text-2xl font-bold text-emerald-900">
+                {distributionSummary.totalAssessed > 0
+                  ? distributionSummary.highestGpa.toFixed(2)
+                  : '-'}
+              </span>
+              <span className="text-xs text-emerald-600 font-medium">/ 4.00</span>
+            </div>
+            <span className="text-[11px] text-emerald-700 truncate block mt-0.5">
+              {distributionSummary.topStudentName || 'Top evaluated student'}
+            </span>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-100">
+            <span className="text-[11px] font-semibold text-blue-800 uppercase tracking-wider block">
+              Pass Rate (GPA &ge; 2.0)
+            </span>
+            <div className="flex items-baseline space-x-1.5 mt-1">
+              <span className="text-2xl font-bold text-blue-900">
+                {distributionSummary.totalAssessed > 0 ? `${distributionSummary.passRate}%` : '-'}
+              </span>
+            </div>
+            <span className="text-[11px] text-blue-700 block mt-0.5">
+              Passing grade threshold met
+            </span>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-purple-50/70 border border-purple-100">
+            <span className="text-[11px] font-semibold text-purple-800 uppercase tracking-wider block">
+              Cohort Assessed
+            </span>
+            <div className="flex items-baseline space-x-1.5 mt-1">
+              <span className="text-2xl font-bold text-purple-900">
+                {distributionSummary.totalAssessed}
+              </span>
+              <span className="text-xs text-purple-600 font-medium">
+                / {filteredStudents.length} students
+              </span>
+            </div>
+            <span className="text-[11px] text-purple-700 block mt-0.5">
+              {filteredStudents.length > 0 && distributionSummary.totalAssessed > 0
+                ? `${Math.round((distributionSummary.totalAssessed / filteredStudents.length) * 100)}% evaluated`
+                : 'Awaiting assessments'}
+            </span>
+          </div>
+        </div>
+
+        {/* Visual Bar Chart */}
+        {distributionSummary.totalAssessed === 0 ? (
+          <div className="py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 text-center">
+            <BarChart3 className="w-12 h-12 mx-auto text-slate-300 mb-3" />
+            <h4 className="text-sm font-bold text-slate-800">
+              No Assessment Data for this Academic Scope
+            </h4>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-4">
+              Enter cognitive CA and Exam marks for {selectedSession} ({selectedTerm}) to view the
+              real-time student performance distribution and GPA spread.
+            </p>
+            <button
+              onClick={() => setActiveTab('assessment')}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition shadow-xs inline-flex items-center space-x-1.5"
+            >
+              <ClipboardCheck className="w-4 h-4" />
+              <span>Enter Student Marks Now</span>
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Chart Canvas Area */}
+            <div className="relative pt-6 pb-2">
+              {/* Background Grid Lines */}
+              <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pb-12 pt-8 text-[10px] text-slate-300 font-mono">
+                <div className="border-b border-slate-100 w-full flex justify-between">
+                  <span>{maxBucketCount}</span>
+                </div>
+                <div className="border-b border-slate-100 w-full flex justify-between">
+                  <span>{Math.round(maxBucketCount * 0.75)}</span>
+                </div>
+                <div className="border-b border-slate-100 w-full flex justify-between">
+                  <span>{Math.round(maxBucketCount * 0.5)}</span>
+                </div>
+                <div className="border-b border-slate-100 w-full flex justify-between">
+                  <span>{Math.round(maxBucketCount * 0.25)}</span>
+                </div>
+                <div className="border-b border-slate-200 w-full flex justify-between">
+                  <span>0</span>
+                </div>
+              </div>
+
+              {/* Vertical Bars Container */}
+              <div className="relative grid grid-cols-5 gap-2 sm:gap-4 h-64 sm:h-72 items-end z-10 px-2 sm:px-6">
+                {distributionSummary.buckets.map(bucket => {
+                  const heightPercent =
+                    maxBucketCount > 0 ? (bucket.count / maxBucketCount) * 100 : 0;
+                  const isSelected = selectedBucketId === bucket.id;
+
+                  return (
+                    <div
+                      key={bucket.id}
+                      onClick={() =>
+                        setSelectedBucketId(prev => (prev === bucket.id ? null : bucket.id))
+                      }
+                      className="group flex flex-col items-center h-full justify-end cursor-pointer"
+                    >
+                      {/* Bar Value Tooltip Pill */}
+                      <div
+                        className={`mb-2 px-2 py-0.5 rounded-md text-[11px] font-bold transition-all shadow-xs flex items-center space-x-1 ${
+                          isSelected
+                            ? 'bg-slate-900 text-white scale-105'
+                            : 'bg-white border border-slate-200 text-slate-800 group-hover:scale-105 group-hover:border-slate-400'
+                        }`}
+                      >
+                        <span>{bucket.count}</span>
+                        <span className="text-[10px] font-normal text-slate-400">
+                          ({bucket.percentage}%)
+                        </span>
+                      </div>
+
+                      {/* The Animated Column Bar */}
+                      <div className="w-full max-w-[58px] bg-slate-100 rounded-t-xl overflow-hidden flex flex-col justify-end p-0.5 h-full">
+                        <div
+                          style={{
+                            height: `${Math.max(6, heightPercent)}%`,
+                          }}
+                          className={`w-full rounded-t-lg bg-gradient-to-t ${bucket.barColor} transition-all duration-500 shadow-sm ${
+                            isSelected ? 'ring-2 ring-slate-900 ring-offset-1' : ''
+                          }`}
+                        />
+                      </div>
+
+                      {/* X-Axis Range & Label */}
+                      <div className="mt-3 text-center space-y-0.5 w-full">
+                        <span className="block text-xs font-bold text-slate-900 truncate">
+                          {bucket.rangeLabel}
+                        </span>
+                        <span className="block text-[10px] text-slate-500 truncate leading-tight">
+                          {bucket.title.split('/')[0]}
+                        </span>
+                        <span className="inline-block text-[10px] font-amiri font-semibold px-1.5 py-0.2 rounded bg-slate-100 text-slate-700">
+                          {bucket.arabicTitle}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Drilldown Student Detail Panel */}
+            {activeBucket && (
+              <div
+                className={`p-4 rounded-xl border ${activeBucket.bgLight} ${activeBucket.borderLight} transition animate-in fade-in zoom-in-95`}
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                  <div>
+                    <h5 className={`text-xs sm:text-sm font-bold ${activeBucket.textColor} flex items-center space-x-2`}>
+                      <span>{activeBucket.title} ({activeBucket.rangeLabel} GPA)</span>
+                      <span className="font-amiri font-bold text-xs bg-white/70 px-2 py-0.5 rounded border border-slate-200">
+                        {activeBucket.arabicTitle}
+                      </span>
+                    </h5>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      {activeBucket.students.length} student{activeBucket.students.length > 1 ? 's' : ''} in this academic bracket ({activeBucket.percentage}% of cohort)
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedBucketId(null)}
+                    className="text-xs text-slate-500 hover:text-slate-800 underline self-start sm:self-auto"
+                  >
+                    Hide Breakdown
+                  </button>
+                </div>
+
+                {activeBucket.students.length === 0 ? (
+                  <p className="text-xs text-slate-500 italic">No students in this GPA range.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                    {activeBucket.students.map(st => (
+                      <div
+                        key={st.studentId}
+                        onClick={() => {
+                          if (onSelectAssessmentStudent) {
+                            onSelectAssessmentStudent(st.studentId, st.className, st.section);
+                          }
+                        }}
+                        className="bg-white/90 hover:bg-white p-2.5 rounded-lg border border-slate-200/80 shadow-2xs flex items-center justify-between cursor-pointer transition hover:border-blue-400 group"
+                      >
+                        <div className="truncate mr-2">
+                          <span className="text-xs font-bold text-slate-900 group-hover:text-blue-700 block truncate">
+                            {st.name}
+                          </span>
+                          <span className="text-[10px] text-slate-500 block truncate">
+                            {st.className} ({st.section}) &bull; {st.studentId}
+                          </span>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <span className="text-xs font-bold text-slate-900 block font-mono">
+                            {st.gpa.toFixed(2)} GPA
+                          </span>
+                          <span className="text-[10px] text-slate-500 block">
+                            {st.average}% avg
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Class Assessment Status Table */}

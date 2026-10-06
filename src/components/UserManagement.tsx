@@ -127,20 +127,23 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     );
   };
 
+  const [formError, setFormError] = useState<string | null>(null);
+
   const handleSubmitUser = (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
 
     if (!editingUser) {
       if (!password) {
-        alert('Password is required for new accounts.');
+        setFormError('Password is required for new accounts.');
         return;
       }
       if (password !== passwordConfirm) {
-        alert('Passwords do not match.');
+        setFormError('Passwords do not match.');
         return;
       }
       if (password.length < 5) {
-        alert('Password must be at least 5 characters long.');
+        setFormError('Password must be at least 5 characters long.');
         return;
       }
     }
@@ -150,7 +153,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       u => u.email.toLowerCase() === emailClean && u.id !== editingUser?.id
     );
     if (existing) {
-      alert(`User with email "${emailClean}" already exists.`);
+      setFormError(`User with email "${emailClean}" already exists.`);
       return;
     }
 
@@ -172,23 +175,47 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       lastLoginAt: editingUser?.lastLoginAt,
     };
 
-    onSaveUser(userToSave);
-    setIsModalOpen(false);
-    showNotification(`User account for "${userToSave.fullName}" saved successfully.`);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: editingUser ? 'Confirm Account Update' : 'Confirm New User Creation',
+      message: `Are you sure you want to ${editingUser ? 'save changes to' : 'create'} user account for "${userToSave.fullName}"?`,
+      details: `Email: ${userToSave.email} • Role: ${userToSave.role.toUpperCase()}`,
+      variant: 'primary',
+      confirmText: editingUser ? 'Yes, Save Changes' : 'Yes, Create Account',
+      onConfirm: () => {
+        onSaveUser(userToSave);
+        setIsModalOpen(false);
+        setFormError(null);
+        showNotification(`User account for "${userToSave.fullName}" saved successfully.`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   // Toggle user status
   const handleToggleStatus = (user: UserAccount) => {
     if (user.id === currentUser.id || user.email.toLowerCase() === 'alaminkaigama@gmail.com') {
-      alert('The primary Super Admin account (alaminkaigama@gmail.com) cannot be disabled.');
+      showNotification('The primary Super Admin account (alaminkaigama@gmail.com) cannot be disabled.');
       return;
     }
-    const updated: UserAccount = {
-      ...user,
-      status: user.status === 'active' ? 'disabled' : 'active',
-    };
-    onSaveUser(updated);
-    showNotification(`Account status updated for ${user.fullName}.`);
+    const isDisabling = user.status === 'active';
+    setConfirmModalConfig({
+      isOpen: true,
+      title: isDisabling ? 'Confirm Disable Account' : 'Confirm Activate Account',
+      message: `Are you sure you want to ${isDisabling ? 'disable' : 'activate'} the account for "${user.fullName}"?`,
+      details: `Email: ${user.email} • Role: ${user.role.toUpperCase()}`,
+      variant: isDisabling ? 'warning' : 'primary',
+      confirmText: isDisabling ? 'Yes, Disable' : 'Yes, Activate',
+      onConfirm: () => {
+        const updated: UserAccount = {
+          ...user,
+          status: isDisabling ? 'disabled' : 'active',
+        };
+        onSaveUser(updated);
+        showNotification(`Account status updated for ${user.fullName}.`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   // Password Reset
@@ -403,6 +430,13 @@ export const UserManagement: React.FC<UserManagementProps> = ({
             <p className="text-xs text-slate-500 mb-4">
               Configure user role, authentication credentials, and class/module permissions.
             </p>
+
+            {formError && (
+              <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-xs font-semibold text-red-800 flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
 
             <form onSubmit={handleSubmitUser} className="space-y-4 text-xs">
               <div>

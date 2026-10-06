@@ -140,3 +140,309 @@ export function rankAssessments(assessments: AssessmentRecord[]): AssessmentReco
     };
   });
 }
+
+/**
+ * Converts a percentage score (0-100) to standard 4.0 scale GPA
+ */
+export function calculateGpaFromAverage(average: number): number {
+  if (isNaN(average) || average <= 0) return 0.0;
+  if (average >= 70) {
+    // 70 - 100 maps to 3.50 - 4.00
+    const gpa = 3.5 + ((average - 70) / 30) * 0.5;
+    return Math.min(4.0, Math.round(gpa * 100) / 100);
+  }
+  if (average >= 60) {
+    // 60 - 69.9 maps to 3.00 - 3.49
+    const gpa = 3.0 + ((average - 60) / 10) * 0.49;
+    return Math.round(gpa * 100) / 100;
+  }
+  if (average >= 50) {
+    // 50 - 59.9 maps to 2.00 - 2.99
+    const gpa = 2.0 + ((average - 50) / 10) * 0.99;
+    return Math.round(gpa * 100) / 100;
+  }
+  if (average >= 45) {
+    // 45 - 49.9 maps to 1.00 - 1.99
+    const gpa = 1.0 + ((average - 45) / 5) * 0.99;
+    return Math.round(gpa * 100) / 100;
+  }
+  // 0 - 44.9 maps to 0.00 - 0.99
+  const gpa = (average / 45) * 0.99;
+  return Math.round(gpa * 100) / 100;
+}
+
+export interface PerformanceBucket {
+  id: string;
+  rangeLabel: string;
+  title: string;
+  arabicTitle: string;
+  count: number;
+  percentage: number;
+  barColor: string;
+  bgLight: string;
+  borderLight: string;
+  textColor: string;
+  students: Array<{
+    studentId: string;
+    name: string;
+    className: string;
+    section: string;
+    gpa: number;
+    average: number;
+  }>;
+}
+
+export interface SessionDistributionSummary {
+  totalAssessed: number;
+  averageGpa: number;
+  averageScore: number;
+  highestGpa: number;
+  highestScore: number;
+  lowestGpa: number;
+  lowestScore: number;
+  passRate: number; // Percentage with GPA >= 2.0 or score >= 50%
+  topStudentName?: string;
+  buckets: PerformanceBucket[];
+}
+
+/**
+ * Computes student performance distribution (GPA / score buckets) for given assessments
+ */
+export function computeGpaDistribution(
+  assessments: AssessmentRecord[],
+  studentsList: { id: string; studentId: string; name: string }[]
+): SessionDistributionSummary {
+  const studentMap = new Map<string, string>();
+  studentsList.forEach(s => studentMap.set(s.studentId, s.name));
+
+  if (!assessments || assessments.length === 0) {
+    const emptyBuckets: PerformanceBucket[] = [
+      {
+        id: 'distinction',
+        rangeLabel: '3.80 - 4.00',
+        title: 'Distinction / 1st Class',
+        arabicTitle: 'ممتاز مرتفع',
+        count: 0,
+        percentage: 0,
+        barColor: 'from-emerald-500 to-teal-600',
+        bgLight: 'bg-emerald-50',
+        borderLight: 'border-emerald-200',
+        textColor: 'text-emerald-800',
+        students: [],
+      },
+      {
+        id: 'upper-credit',
+        rangeLabel: '3.30 - 3.79',
+        title: 'Upper Credit / Very Good',
+        arabicTitle: 'جيد جداً',
+        count: 0,
+        percentage: 0,
+        barColor: 'from-blue-500 to-indigo-600',
+        bgLight: 'bg-blue-50',
+        borderLight: 'border-blue-200',
+        textColor: 'text-blue-800',
+        students: [],
+      },
+      {
+        id: 'credit',
+        rangeLabel: '2.80 - 3.29',
+        title: 'Credit / Good',
+        arabicTitle: 'جيد',
+        count: 0,
+        percentage: 0,
+        barColor: 'from-cyan-500 to-blue-600',
+        bgLight: 'bg-cyan-50',
+        borderLight: 'border-cyan-200',
+        textColor: 'text-cyan-800',
+        students: [],
+      },
+      {
+        id: 'pass',
+        rangeLabel: '2.00 - 2.79',
+        title: 'Pass / Fair',
+        arabicTitle: 'مقبول',
+        count: 0,
+        percentage: 0,
+        barColor: 'from-amber-400 to-amber-500',
+        bgLight: 'bg-amber-50',
+        borderLight: 'border-amber-200',
+        textColor: 'text-amber-800',
+        students: [],
+      },
+      {
+        id: 'fail',
+        rangeLabel: '0.00 - 1.99',
+        title: 'Needs Support / Fail',
+        arabicTitle: 'راسب / يحتاج دعم',
+        count: 0,
+        percentage: 0,
+        barColor: 'from-rose-500 to-red-600',
+        bgLight: 'bg-rose-50',
+        borderLight: 'border-rose-200',
+        textColor: 'text-rose-800',
+        students: [],
+      },
+    ];
+
+    return {
+      totalAssessed: 0,
+      averageGpa: 0,
+      averageScore: 0,
+      highestGpa: 0,
+      highestScore: 0,
+      lowestGpa: 0,
+      lowestScore: 0,
+      passRate: 0,
+      buckets: emptyBuckets,
+    };
+  }
+
+  // Deduplicate assessments by studentId (if multiple terms, calculate student's session average)
+  const studentRecordsMap = new Map<
+    string,
+    {
+      studentId: string;
+      name: string;
+      className: string;
+      section: string;
+      averages: number[];
+    }
+  >();
+
+  assessments.forEach(a => {
+    const existing = studentRecordsMap.get(a.studentId);
+    if (existing) {
+      existing.averages.push(a.finalAverage);
+    } else {
+      studentRecordsMap.set(a.studentId, {
+        studentId: a.studentId,
+        name: studentMap.get(a.studentId) || a.studentId,
+        className: a.className,
+        section: a.section,
+        averages: [a.finalAverage],
+      });
+    }
+  });
+
+  const studentEvaluations = Array.from(studentRecordsMap.values()).map(item => {
+    const avgScore =
+      item.averages.length > 0
+        ? Math.round((item.averages.reduce((sum, v) => sum + v, 0) / item.averages.length) * 10) /
+          10
+        : 0;
+    const gpa = calculateGpaFromAverage(avgScore);
+    return {
+      studentId: item.studentId,
+      name: item.name,
+      className: item.className,
+      section: item.section,
+      average: avgScore,
+      gpa,
+    };
+  });
+
+  const totalAssessed = studentEvaluations.length;
+  const gpas = studentEvaluations.map(s => s.gpa);
+  const scores = studentEvaluations.map(s => s.average);
+
+  const highestGpa = Math.max(...gpas);
+  const lowestGpa = Math.min(...gpas);
+  const highestScore = Math.max(...scores);
+  const lowestScore = Math.min(...scores);
+  const averageGpa =
+    Math.round((gpas.reduce((sum, v) => sum + v, 0) / totalAssessed) * 100) / 100;
+  const averageScore =
+    Math.round((scores.reduce((sum, v) => sum + v, 0) / totalAssessed) * 10) / 10;
+  const passCount = studentEvaluations.filter(s => s.gpa >= 2.0 || s.average >= 50).length;
+  const passRate = totalAssessed > 0 ? Math.round((passCount / totalAssessed) * 1000) / 10 : 0;
+
+  const topStudent = studentEvaluations.find(s => s.gpa === highestGpa);
+
+  // Group into 5 buckets
+  const bDistinction = studentEvaluations.filter(s => s.gpa >= 3.8);
+  const bUpper = studentEvaluations.filter(s => s.gpa >= 3.3 && s.gpa < 3.8);
+  const bCredit = studentEvaluations.filter(s => s.gpa >= 2.8 && s.gpa < 3.3);
+  const bPass = studentEvaluations.filter(s => s.gpa >= 2.0 && s.gpa < 2.8);
+  const bFail = studentEvaluations.filter(s => s.gpa < 2.0);
+
+  const buckets: PerformanceBucket[] = [
+    {
+      id: 'distinction',
+      rangeLabel: '3.80 - 4.00',
+      title: 'Distinction / 1st Class',
+      arabicTitle: 'ممتاز مرتفع',
+      count: bDistinction.length,
+      percentage: totalAssessed > 0 ? Math.round((bDistinction.length / totalAssessed) * 100) : 0,
+      barColor: 'from-emerald-500 to-teal-600',
+      bgLight: 'bg-emerald-50',
+      borderLight: 'border-emerald-200',
+      textColor: 'text-emerald-800',
+      students: bDistinction,
+    },
+    {
+      id: 'upper-credit',
+      rangeLabel: '3.30 - 3.79',
+      title: 'Upper Credit / Very Good',
+      arabicTitle: 'جيد جداً',
+      count: bUpper.length,
+      percentage: totalAssessed > 0 ? Math.round((bUpper.length / totalAssessed) * 100) : 0,
+      barColor: 'from-blue-500 to-indigo-600',
+      bgLight: 'bg-blue-50',
+      borderLight: 'border-blue-200',
+      textColor: 'text-blue-800',
+      students: bUpper,
+    },
+    {
+      id: 'credit',
+      rangeLabel: '2.80 - 3.29',
+      title: 'Credit / Good',
+      arabicTitle: 'جيد',
+      count: bCredit.length,
+      percentage: totalAssessed > 0 ? Math.round((bCredit.length / totalAssessed) * 100) : 0,
+      barColor: 'from-cyan-500 to-blue-600',
+      bgLight: 'bg-cyan-50',
+      borderLight: 'border-cyan-200',
+      textColor: 'text-cyan-800',
+      students: bCredit,
+    },
+    {
+      id: 'pass',
+      rangeLabel: '2.00 - 2.79',
+      title: 'Pass / Fair',
+      arabicTitle: 'مقبول',
+      count: bPass.length,
+      percentage: totalAssessed > 0 ? Math.round((bPass.length / totalAssessed) * 100) : 0,
+      barColor: 'from-amber-400 to-amber-500',
+      bgLight: 'bg-amber-50',
+      borderLight: 'border-amber-200',
+      textColor: 'text-amber-800',
+      students: bPass,
+    },
+    {
+      id: 'fail',
+      rangeLabel: '0.00 - 1.99',
+      title: 'Needs Support / Fail',
+      arabicTitle: 'راسب / يحتاج دعم',
+      count: bFail.length,
+      percentage: totalAssessed > 0 ? Math.round((bFail.length / totalAssessed) * 100) : 0,
+      barColor: 'from-rose-500 to-red-600',
+      bgLight: 'bg-rose-50',
+      borderLight: 'border-rose-200',
+      textColor: 'text-rose-800',
+      students: bFail,
+    },
+  ];
+
+  return {
+    totalAssessed,
+    averageGpa,
+    averageScore,
+    highestGpa,
+    highestScore,
+    lowestGpa,
+    lowestScore,
+    passRate,
+    topStudentName: topStudent?.name,
+    buckets,
+  };
+}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppDatabase, AttendanceRecord, Student, UserAccount } from '../types';
 import { exportAttendanceToExcel } from '../utils/excel';
+import { ConfirmModal } from './ConfirmModal';
 import {
   CalendarCheck,
   Save,
@@ -110,6 +111,17 @@ export const AttendanceManager: React.FC<AttendanceManagerProps> = ({
     });
   };
 
+  // State for in-app confirmation modal
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
+
   // Apply default days opened to all students in this class
   const handleApplyDefaultOpened = () => {
     setAttendanceRows(prev =>
@@ -142,9 +154,20 @@ export const AttendanceManager: React.FC<AttendanceManagerProps> = ({
       updatedAt: new Date().toISOString(),
     }));
 
-    onSaveAttendanceBatch(recordsToSave);
-    setNotification('Attendance records saved and linked with report sheets!');
-    setTimeout(() => setNotification(null), 3500);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Save Attendance',
+      message: `Are you sure you want to save attendance records for ${recordsToSave.length} students in ${selectedClass} (${selectedSection})?`,
+      details: `Session: ${session} • Term: ${term} • Students: ${recordsToSave.length}`,
+      variant: 'primary',
+      confirmText: 'Yes, Save Attendance',
+      onConfirm: () => {
+        onSaveAttendanceBatch(recordsToSave);
+        setNotification('Attendance records saved and linked with report sheets!');
+        setTimeout(() => setNotification(null), 3500);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   // Export to Excel
@@ -432,6 +455,18 @@ export const AttendanceManager: React.FC<AttendanceManagerProps> = ({
           </table>
         </div>
       </div>
+      {confirmModalConfig && (
+        <ConfirmModal
+          isOpen={confirmModalConfig.isOpen}
+          title={confirmModalConfig.title}
+          message={confirmModalConfig.message}
+          details={confirmModalConfig.details}
+          confirmText={confirmModalConfig.confirmText}
+          variant={confirmModalConfig.variant}
+          onConfirm={confirmModalConfig.onConfirm}
+          onCancel={() => setConfirmModalConfig(null)}
+        />
+      )}
     </div>
   );
 };

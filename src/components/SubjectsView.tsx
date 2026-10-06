@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AppDatabase, SubjectItem } from '../types';
 import { BookOpen, Plus, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import { ConfirmModal } from './ConfirmModal';
 
 interface SubjectsViewProps {
   db: AppDatabase;
@@ -11,6 +12,15 @@ export const SubjectsView: React.FC<SubjectsViewProps> = ({ db, onUpdateSubjects
   const [newEnglishName, setNewEnglishName] = useState('');
   const [newArabicName, setNewArabicName] = useState('');
   const [notification, setNotification] = useState<string | null>(null);
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -36,28 +46,57 @@ export const SubjectsView: React.FC<SubjectsViewProps> = ({ db, onUpdateSubjects
       isActive: true,
     };
 
-    onUpdateSubjects([...db.subjects, newSub]);
-    setNewEnglishName('');
-    setNewArabicName('');
-    showNotification(`Subject "${newSub.name}" added successfully!`);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm New Subject',
+      message: `Are you sure you want to add "${newSub.name}" to the school curriculum?`,
+      details: `Subject: ${newSub.name} • Arabic: ${newSub.arabicName}`,
+      variant: 'primary',
+      confirmText: 'Yes, Add Subject',
+      onConfirm: () => {
+        onUpdateSubjects([...db.subjects, newSub]);
+        setNewEnglishName('');
+        setNewArabicName('');
+        showNotification(`Subject "${newSub.name}" added successfully!`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
-  const handleToggleActive = (id: string) => {
-    const updated = db.subjects.map(s => (s.id === id ? { ...s, isActive: !s.isActive } : s));
-    onUpdateSubjects(updated);
+  const handleToggleActive = (id: string, name: string, currentStatus: boolean) => {
+    setConfirmModalConfig({
+      isOpen: true,
+      title: currentStatus ? 'Disable Subject' : 'Activate Subject',
+      message: `Are you sure you want to ${currentStatus ? 'disable' : 'activate'} subject "${name}"?`,
+      details: currentStatus
+        ? 'Disabled subjects will not appear on new assessment entries.'
+        : 'Active subjects appear on assessment entry rosters.',
+      variant: currentStatus ? 'warning' : 'primary',
+      confirmText: currentStatus ? 'Yes, Disable' : 'Yes, Activate',
+      onConfirm: () => {
+        const updated = db.subjects.map(s => (s.id === id ? { ...s, isActive: !s.isActive } : s));
+        onUpdateSubjects(updated);
+        showNotification(`Subject "${name}" status updated.`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   const handleDelete = (id: string, name: string) => {
-    if (
-      !window.confirm(
-        `Are you sure you want to delete "${name}"? Historical assessment records will remain safely intact.`
-      )
-    ) {
-      return;
-    }
-    const updated = db.subjects.filter(s => s.id !== id);
-    onUpdateSubjects(updated);
-    showNotification(`Subject "${name}" deleted.`);
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Subject Deletion',
+      message: `Are you sure you want to delete subject "${name}"? Historical assessment records will remain safely intact. Do you want to proceed?`,
+      details: `Subject: ${name}`,
+      variant: 'danger',
+      confirmText: 'Yes, Delete Subject',
+      onConfirm: () => {
+        const updated = db.subjects.filter(s => s.id !== id);
+        onUpdateSubjects(updated);
+        showNotification(`Subject "${name}" deleted.`);
+        setConfirmModalConfig(null);
+      },
+    });
   };
 
   return (
@@ -160,7 +199,7 @@ export const SubjectsView: React.FC<SubjectsViewProps> = ({ db, onUpdateSubjects
                   </td>
                   <td className="py-3 px-4 text-center">
                     <button
-                      onClick={() => handleToggleActive(sub.id)}
+                      onClick={() => handleToggleActive(sub.id, sub.name, sub.isActive)}
                       className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-semibold transition ${
                         sub.isActive
                           ? 'bg-emerald-100 text-emerald-800'
@@ -195,6 +234,19 @@ export const SubjectsView: React.FC<SubjectsViewProps> = ({ db, onUpdateSubjects
           </table>
         </div>
       </div>
+
+      {confirmModalConfig && (
+        <ConfirmModal
+          isOpen={confirmModalConfig.isOpen}
+          title={confirmModalConfig.title}
+          message={confirmModalConfig.message}
+          details={confirmModalConfig.details}
+          confirmText={confirmModalConfig.confirmText}
+          variant={confirmModalConfig.variant}
+          onConfirm={confirmModalConfig.onConfirm}
+          onCancel={() => setConfirmModalConfig(null)}
+        />
+      )}
     </div>
   );
 };

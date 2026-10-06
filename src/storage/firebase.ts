@@ -163,6 +163,34 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       }
     }
 
+    // 2b. Clean up deleted students from cloud Firestore
+    try {
+      const existingFirestoreStudentDocs = await getDocs(
+        collection(db, 'schools', SCHOOL_DOC_ID, 'students')
+      );
+      const currentStudentIds = new Set((appDb.students || []).map(s => s.id));
+      const currentStudentCodes = new Set((appDb.students || []).map(s => s.studentId));
+      const deleteBatch = writeBatch(db);
+      let delCount = 0;
+      existingFirestoreStudentDocs.forEach(d => {
+        const data = d.data();
+        const matches =
+          currentStudentIds.has(d.id) ||
+          currentStudentCodes.has(d.id) ||
+          currentStudentIds.has(data.id) ||
+          currentStudentCodes.has(data.studentId);
+        if (!matches) {
+          deleteBatch.delete(d.ref);
+          delCount++;
+        }
+      });
+      if (delCount > 0) {
+        await deleteBatch.commit();
+      }
+    } catch {
+      // Non-fatal cleanup
+    }
+
     // 3. Save Assessments in Batches
     if (appDb.assessments && appDb.assessments.length > 0) {
       const asmBatches: AssessmentRecord[][] = [];
@@ -228,24 +256,72 @@ export async function deleteStudentFromFirestore(
   studentId?: string
 ): Promise<void> {
   try {
-    const studentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', studentInternalId);
-    await deleteDoc(studentRef);
+    // 1. Direct delete by internal ID
+    if (studentInternalId) {
+      const studentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', studentInternalId);
+      await deleteDoc(studentRef).catch(() => {});
+    }
 
-    if (studentId) {
-      // Also clean up any assessments belonging to this student in Firestore
+    // 2. Direct delete by studentId
+    if (studentId && studentId !== studentInternalId) {
+      const altStudentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', studentId);
+      await deleteDoc(altStudentRef).catch(() => {});
+    }
+
+    // 3. Query all docs in students subcollection to catch any document matching ID or studentId
+    const stuCol = collection(db, 'schools', SCHOOL_DOC_ID, 'students');
+    const stuSnaps = await getDocs(stuCol);
+    const stuBatch = writeBatch(db);
+    let stuCount = 0;
+    stuSnaps.forEach(d => {
+      const data = d.data();
+      if (
+        d.id === studentInternalId ||
+        d.id === studentId ||
+        data.id === studentInternalId ||
+        data.studentId === studentId ||
+        data.studentId === studentInternalId
+      ) {
+        stuBatch.delete(d.ref);
+        stuCount++;
+      }
+    });
+    if (stuCount > 0) {
+      await stuBatch.commit();
+    }
+
+    // 4. Clean up any assessments belonging to this student in Firestore
+    const sid = studentId || studentInternalId;
+    if (sid) {
       const asmCol = collection(db, 'schools', SCHOOL_DOC_ID, 'assessments');
       const asmSnaps = await getDocs(asmCol);
       const batch = writeBatch(db);
       let count = 0;
       asmSnaps.forEach(d => {
         const data = d.data();
-        if (data.studentId === studentId) {
+        if (data.studentId === sid || data.studentId === studentInternalId) {
           batch.delete(d.ref);
           count++;
         }
       });
       if (count > 0) {
         await batch.commit();
+      }
+
+      // 5. Clean up any attendance belonging to this student in Firestore
+      const attCol = collection(db, 'schools', SCHOOL_DOC_ID, 'attendance');
+      const attSnaps = await getDocs(attCol);
+      const attBatch = writeBatch(db);
+      let attCount = 0;
+      attSnaps.forEach(d => {
+        const data = d.data();
+        if (data.studentId === sid || data.studentId === studentInternalId) {
+          attBatch.delete(d.ref);
+          attCount++;
+        }
+      });
+      if (attCount > 0) {
+        await attBatch.commit();
       }
     }
   } catch (error) {
@@ -352,17 +428,15 @@ export function setupRealtimeSync(
   const unsubStudents = onSnapshot(
     studentsColRef,
     snapshot => {
-      if (!snapshot.empty) {
-        const cloudStudents: Student[] = [];
-        snapshot.forEach(docSnap => {
-          cloudStudents.push(docSnap.data() as Student);
-        });
-        currentCloudDb = {
-          ...currentCloudDb,
-          students: cloudStudents,
-        };
-        notifyChange();
-      }
+      const cloudStudents: Student[] = [];
+      snapshot.forEach(docSnap => {
+        cloudStudents.push(docSnap.data() as Student);
+      });
+      currentCloudDb = {
+        ...currentCloudDb,
+        students: cloudStudents,
+      };
+      notifyChange();
     },
     error => {
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/students`);
@@ -375,17 +449,15 @@ export function setupRealtimeSync(
   const unsubAssessments = onSnapshot(
     assessmentsColRef,
     snapshot => {
-      if (!snapshot.empty) {
-        const cloudAssessments: AssessmentRecord[] = [];
-        snapshot.forEach(docSnap => {
-          cloudAssessments.push(docSnap.data() as AssessmentRecord);
-        });
-        currentCloudDb = {
-          ...currentCloudDb,
-          assessments: cloudAssessments,
-        };
-        notifyChange();
-      }
+      const cloudAssessments: AssessmentRecord[] = [];
+      snapshot.forEach(docSnap => {
+        cloudAssessments.push(docSnap.data() as AssessmentRecord);
+      });
+      currentCloudDb = {
+        ...currentCloudDb,
+        assessments: cloudAssessments,
+      };
+      notifyChange();
     },
     error => {
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/assessments`);
@@ -398,17 +470,15 @@ export function setupRealtimeSync(
   const unsubAttendance = onSnapshot(
     attendanceColRef,
     snapshot => {
-      if (!snapshot.empty) {
-        const cloudAttendance: AttendanceRecord[] = [];
-        snapshot.forEach(docSnap => {
-          cloudAttendance.push(docSnap.data() as AttendanceRecord);
-        });
-        currentCloudDb = {
-          ...currentCloudDb,
-          attendance: cloudAttendance,
-        };
-        notifyChange();
-      }
+      const cloudAttendance: AttendanceRecord[] = [];
+      snapshot.forEach(docSnap => {
+        cloudAttendance.push(docSnap.data() as AttendanceRecord);
+      });
+      currentCloudDb = {
+        ...currentCloudDb,
+        attendance: cloudAttendance,
+      };
+      notifyChange();
     },
     error => {
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/attendance`);

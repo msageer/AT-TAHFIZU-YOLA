@@ -14,6 +14,7 @@ import {
   parseAndValidateAssessmentSpreadsheet,
   AssessmentSheetImportResult,
 } from '../utils/excel';
+import { ConfirmModal } from './ConfirmModal';
 import {
   Save,
   CheckCircle,
@@ -123,6 +124,16 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
   const [notification, setNotification] = useState<{ text: string; type: 'success' | 'error' } | null>(
     null
   );
+
+  const [confirmModalConfig, setConfirmModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => void;
+  } | null>(null);
 
   // Spreadsheet upload state
   const [isUploadingSheet, setIsUploadingSheet] = useState(false);
@@ -300,12 +311,23 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       updatedAt: new Date().toISOString(),
     };
 
-    onSaveAssessment(assessmentRecord);
-    setNotification({
-      text: `Assessment for ${selectedStudent.name} saved and ranked successfully!`,
-      type: 'success',
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Save Assessment',
+      message: `Are you sure you want to save and recalculate marks for "${selectedStudent.name}"?`,
+      details: `Student: ${selectedStudent.name} (${selectedStudent.studentId}) • Total: ${totalScore} • Average: ${finalAverage}% • Subjects: ${subjectScores.length}`,
+      variant: 'primary',
+      confirmText: 'Yes, Save Assessment',
+      onConfirm: () => {
+        onSaveAssessment(assessmentRecord);
+        setNotification({
+          text: `Assessment for ${selectedStudent.name} saved and ranked successfully!`,
+          type: 'success',
+        });
+        setTimeout(() => setNotification(null), 3500);
+        setConfirmModalConfig(null);
+      },
     });
-    setTimeout(() => setNotification(null), 3500);
   };
 
   // Fast Student Navigation (Previous / Next)
@@ -1044,6 +1066,18 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
             </div>
           </div>
         </div>
+      )}
+      {confirmModalConfig && (
+        <ConfirmModal
+          isOpen={confirmModalConfig.isOpen}
+          title={confirmModalConfig.title}
+          message={confirmModalConfig.message}
+          details={confirmModalConfig.details}
+          confirmText={confirmModalConfig.confirmText}
+          variant={confirmModalConfig.variant}
+          onConfirm={confirmModalConfig.onConfirm}
+          onCancel={() => setConfirmModalConfig(null)}
+        />
       )}
     </div>
   );

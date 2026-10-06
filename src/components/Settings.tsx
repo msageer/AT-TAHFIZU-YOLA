@@ -99,23 +99,43 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   // Save all settings
   const handleSaveSchoolSettings = () => {
     const caTotal = Number(schoolSettings.ca1Max) + Number(schoolSettings.ca2Max) + Number(schoolSettings.examMax);
+    const proceedWithSave = () => {
+      const updatedDb: AppDatabase = {
+        ...db,
+        settings: schoolSettings,
+        classes,
+        sections,
+        subjects,
+        gradingBoundaries,
+        psychomotorItems,
+      };
+      onUpdateDb(updatedDb);
+      showNotification('School settings updated successfully!');
+      setConfirmModalConfig(null);
+    };
+
     if (caTotal !== 100) {
-      if (!window.confirm(`Warning: 1st CA (${schoolSettings.ca1Max}) + 2nd CA (${schoolSettings.ca2Max}) + Exam (${schoolSettings.examMax}) = ${caTotal}%, not 100%. Do you still want to proceed?`)) {
-        return;
-      }
+      setConfirmModalConfig({
+        isOpen: true,
+        title: 'Score Distribution Warning',
+        message: `1st CA (${schoolSettings.ca1Max}) + 2nd CA (${schoolSettings.ca2Max}) + Exam (${schoolSettings.examMax}) = ${caTotal}%, which does not equal 100%. Do you still want to proceed?`,
+        details: `Calculated total: ${caTotal}% (Recommended: 100%)`,
+        variant: 'warning',
+        confirmText: 'Yes, Save Anyway',
+        onConfirm: proceedWithSave,
+      });
+      return;
     }
 
-    const updatedDb: AppDatabase = {
-      ...db,
-      settings: schoolSettings,
-      classes,
-      sections,
-      subjects,
-      gradingBoundaries,
-      psychomotorItems,
-    };
-    onUpdateDb(updatedDb);
-    showNotification('School settings updated successfully!');
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Save Settings',
+      message: `Are you sure you want to save school configuration for "${schoolSettings.schoolName}"?`,
+      details: `Academic Session: ${schoolSettings.currentSession} • Term: ${schoolSettings.currentTerm}`,
+      variant: 'primary',
+      confirmText: 'Yes, Save Settings',
+      onConfirm: proceedWithSave,
+    });
   };
 
   // Class management handlers
