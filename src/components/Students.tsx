@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Student, AppDatabase, NavigationTab } from '../types';
+import { Student, AppDatabase, NavigationTab, UserAccount } from '../types';
 import {
   Search,
   Plus,
@@ -14,10 +14,12 @@ import {
   MapPin,
   Calendar,
   AlertCircle,
+  Lock,
 } from 'lucide-react';
 
 interface StudentsProps {
   db: AppDatabase;
+  currentUser?: UserAccount;
   onSaveStudent: (student: Student) => void;
   onDeleteStudent: (studentId: string) => void;
   setActiveTab: (tab: NavigationTab) => void;
@@ -27,16 +29,21 @@ interface StudentsProps {
 
 export const Students: React.FC<StudentsProps> = ({
   db,
+  currentUser,
   onSaveStudent,
   onDeleteStudent,
   setActiveTab,
   onSelectAssessmentStudent,
   onSelectReportStudent,
 }) => {
+  const isTeacher = currentUser?.role === 'teacher';
+  const teacherClass = currentUser?.assignedClass;
+  const teacherSection = currentUser?.assignedSection;
+
   // Search & Filter State
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterClass, setFilterClass] = useState('ALL');
-  const [filterSection, setFilterSection] = useState('ALL');
+  const [filterClass, setFilterClass] = useState(isTeacher && teacherClass ? teacherClass : 'ALL');
+  const [filterSection, setFilterSection] = useState(isTeacher && teacherSection ? teacherSection : 'ALL');
   const [filterGender, setFilterGender] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('Active');
 
@@ -50,8 +57,8 @@ export const Students: React.FC<StudentsProps> = ({
     studentId: '',
     admissionNumber: '',
     name: '',
-    className: db.classes[0]?.name || 'Nursery One',
-    section: db.sections[0]?.name || 'A',
+    className: isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One'),
+    section: isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A'),
     gender: 'Male',
     dateOfBirth: '',
     parentName: '',
@@ -64,6 +71,10 @@ export const Students: React.FC<StudentsProps> = ({
 
   // Filter students
   const filteredStudents = db.students.filter(student => {
+    // If teacher, strictly enforce their assigned class
+    if (isTeacher && teacherClass && student.className !== teacherClass) return false;
+    if (isTeacher && teacherSection && student.section !== teacherSection) return false;
+
     // Search query
     const q = searchTerm.toLowerCase().trim();
     if (q) {
@@ -75,8 +86,8 @@ export const Students: React.FC<StudentsProps> = ({
       if (!matchName && !matchId && !matchAdm && !matchParent && !matchPhone) return false;
     }
 
-    if (filterClass !== 'ALL' && student.className !== filterClass) return false;
-    if (filterSection !== 'ALL' && student.section !== filterSection) return false;
+    if (!isTeacher && filterClass !== 'ALL' && student.className !== filterClass) return false;
+    if (!isTeacher && filterSection !== 'ALL' && student.section !== filterSection) return false;
     if (filterGender !== 'ALL' && student.gender !== filterGender) return false;
     if (filterStatus !== 'ALL' && student.status !== filterStatus) return false;
 
@@ -94,8 +105,8 @@ export const Students: React.FC<StudentsProps> = ({
       studentId: autoId,
       admissionNumber: autoAdm,
       name: '',
-      className: db.classes[0]?.name || 'Nursery One',
-      section: db.sections[0]?.name || 'A',
+      className: isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One'),
+      section: isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A'),
       gender: 'Male',
       dateOfBirth: '',
       parentName: '',

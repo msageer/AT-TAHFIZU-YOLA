@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AppDatabase, NavigationTab } from '../types';
+import { AppDatabase, NavigationTab, UserAccount } from '../types';
 import { computeClassStatistics, calculateGrade } from '../utils/ranking';
 import { exportAssessmentBroadsheetToExcel } from '../utils/excel';
 import {
@@ -10,26 +10,37 @@ import {
   Eye,
   X,
   Building2,
+  Lock,
 } from 'lucide-react';
 
 interface ClassSummaryProps {
   db: AppDatabase;
+  currentUser?: UserAccount;
   setActiveTab: (tab: NavigationTab) => void;
   onSelectReportStudent: (studentId: string) => void;
 }
 
 export const ClassSummary: React.FC<ClassSummaryProps> = ({
   db,
+  currentUser,
   setActiveTab,
   onSelectReportStudent,
 }) => {
-  const [selectedSession, setSelectedSession] = useState<string>(db.settings.currentSession);
-  const [selectedTerm, setSelectedTerm] = useState<string>(db.settings.currentTerm);
+  const isTeacher = currentUser?.role === 'teacher';
+  const teacherClass = currentUser?.assignedClass;
+  const teacherSection = currentUser?.assignedSection;
+
+  const [selectedSession, setSelectedSession] = useState<string>(
+    currentUser?.assignedSession || db.settings.currentSession || db.sessions[0] || '2026/2027'
+  );
+  const [selectedTerm, setSelectedTerm] = useState<string>(
+    db.settings.currentTerm || db.terms[0] || '1st Term'
+  );
   const [selectedClass, setSelectedClass] = useState<string>(
-    db.classes[0]?.name || 'Nursery One'
+    isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One')
   );
   const [selectedSection, setSelectedSection] = useState<string>(
-    db.sections[0]?.name || 'A'
+    isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A')
   );
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -155,36 +166,50 @@ export const ClassSummary: React.FC<ClassSummaryProps> = ({
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              Class
+              {isTeacher ? 'Class (Locked)' : 'Class'}
             </label>
-            <select
-              value={selectedClass}
-              onChange={e => setSelectedClass(e.target.value)}
-              className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-slate-50 text-slate-900"
-            >
-              {db.classes.map(c => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            {isTeacher ? (
+              <div className="w-full text-xs font-bold border border-amber-300 rounded-lg p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
+                <span>{selectedClass}</span>
+                <Lock className="w-3.5 h-3.5 text-amber-600" />
+              </div>
+            ) : (
+              <select
+                value={selectedClass}
+                onChange={e => setSelectedClass(e.target.value)}
+                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-slate-50 text-slate-900"
+              >
+                {db.classes.map(c => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              Section
+              {isTeacher && teacherSection ? 'Section (Locked)' : 'Section'}
             </label>
-            <select
-              value={selectedSection}
-              onChange={e => setSelectedSection(e.target.value)}
-              className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-slate-50 text-slate-900"
-            >
-              {db.sections.map(s => (
-                <option key={s.id} value={s.name}>
-                  Section {s.name}
-                </option>
-              ))}
-            </select>
+            {isTeacher && teacherSection ? (
+              <div className="w-full text-xs font-bold border border-amber-300 rounded-lg p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
+                <span>Section {selectedSection}</span>
+                <Lock className="w-3.5 h-3.5 text-amber-600" />
+              </div>
+            ) : (
+              <select
+                value={selectedSection}
+                onChange={e => setSelectedSection(e.target.value)}
+                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-slate-50 text-slate-900"
+              >
+                {db.sections.map(s => (
+                  <option key={s.id} value={s.name}>
+                    Section {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
       </div>

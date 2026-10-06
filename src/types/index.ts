@@ -1,33 +1,83 @@
+export type UserRole = 'super_admin' | 'staff' | 'teacher';
+
+export type StaffPermission =
+  | 'students'
+  | 'classes'
+  | 'assessment'
+  | 'attendance'
+  | 'reports'
+  | 'class-summary'
+  | 'promotion'
+  | 'import-export'
+  | 'settings';
+
+export interface UserAccount {
+  id: string;
+  email: string; // Used for login
+  username?: string;
+  fullName: string;
+  phone?: string;
+  passwordHash: string; // In-browser mock hashed password
+  role: UserRole;
+  schoolId: string;
+  status: 'active' | 'disabled';
+  // Teacher specific constraints
+  assignedClass?: string;
+  assignedSection?: string;
+  assignedSession?: string;
+  // Staff specific permissions
+  permissions?: StaffPermission[];
+  createdAt: string;
+  lastLoginAt?: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  schoolId: string;
+  userId: string;
+  userName: string;
+  userRole: UserRole;
+  action: string;
+  details: string;
+  timestamp: string;
+}
+
 export interface SchoolSettings {
+  schoolId: string;
   schoolName: string;
   arabicSchoolName: string;
   motto: string;
   address: string;
   telephone: string;
   email: string;
+  website?: string;
   currentSession: string;
   currentTerm: string;
   logoUrl: string; // base64 or URL
   ca1Max: number; // default 20
   ca2Max: number; // default 20
   examMax: number; // default 60
-  isOnboarded?: boolean;
+  isSetupComplete: boolean;
+  useSections?: boolean;
   lastBackupAt?: string;
 }
 
 export interface ClassItem {
   id: string;
+  schoolId?: string;
   name: string;
   order: number;
 }
 
 export interface SectionItem {
   id: string;
+  schoolId?: string;
   name: string;
 }
 
 export interface SubjectItem {
   id: string;
+  schoolId?: string;
   name: string;
   arabicName: string;
   code?: string;
@@ -61,6 +111,7 @@ export interface StudentHistoryEntry {
 
 export interface Student {
   id: string; // Internal unique ID
+  schoolId?: string;
   studentId: string; // Unique student ID e.g. STU-2025-001
   admissionNumber: string; // Unique admission number e.g. ADM/2025/001
   name: string;
@@ -91,6 +142,7 @@ export interface SubjectScore {
 
 export interface AssessmentRecord {
   id: string;
+  schoolId?: string;
   studentId: string;
   academicSession: string;
   term: string;
@@ -124,6 +176,7 @@ export interface AssessmentRecord {
 
 export interface AttendanceRecord {
   id: string;
+  schoolId?: string;
   studentId: string;
   academicSession: string;
   term: string;
@@ -159,9 +212,12 @@ export type NavigationTab =
   | 'class-summary'
   | 'promotion'
   | 'import-export'
+  | 'users'
+  | 'audit-log'
   | 'settings';
 
 export interface AppDatabase {
+  schoolId: string;
   settings: SchoolSettings;
   classes: ClassItem[];
   sections: SectionItem[];
@@ -173,4 +229,6 @@ export interface AppDatabase {
   students: Student[];
   assessments: AssessmentRecord[];
   attendance?: AttendanceRecord[];
+  users: UserAccount[];
+  auditLogs: AuditLogEntry[];
 }

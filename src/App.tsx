@@ -3,6 +3,9 @@ import {
   loadDatabase,
   saveDatabase,
   resetDatabaseToDefault,
+  getCurrentSessionUser,
+  setCurrentSessionUser,
+  addAuditLog,
 } from './storage/db';
 import {
   AppDatabase,
@@ -15,8 +18,10 @@ import {
   SectionItem,
   StudentHistoryEntry,
   SchoolSettings,
+  UserAccount,
 } from './types';
 import { rankAssessments } from './utils/ranking';
+import { AuthPage } from './components/AuthPage';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './components/Dashboard';
 import { Students } from './components/Students';
@@ -27,14 +32,18 @@ import { ClassSummary } from './components/ClassSummary';
 import { ReportCenter } from './components/ReportCenter';
 import { StudentPromotion } from './components/StudentPromotion';
 import { ExcelManager } from './components/ExcelManager';
+import { UserManagement } from './components/UserManagement';
+import { AuditLogView } from './components/AuditLogView';
 import { Settings } from './components/Settings';
 import { OnboardingWizard } from './components/OnboardingWizard';
 
 export default function App() {
   const [db, setDb] = useState<AppDatabase>(() => loadDatabase());
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() =>
+    getCurrentSessionUser()
+  );
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(false);
-  const [userRole, setUserRole] = useState<'admin' | 'teacher'>('admin');
 
   // Navigation state passes
   const [selectedAssessmentTarget, setSelectedAssessmentTarget] = useState<{
@@ -51,17 +60,145 @@ export default function App() {
     saveDatabase(newDb);
   };
 
-  // Student CRUD
+  // ==========================================
+  // AUTHENTICATION HANDLERS
+  // ==========================================
+  const handleLoginSuccess = (user: UserAccount) => {
+    let updatedDb = addAuditLog(
+      db,
+      user,
+      'USER_LOGIN',
+      `User ${user.fullName} (${user.role}) signed in`
+    );
+    // Update lastLoginAt in users list
+    const userIndex = updatedDb.users.findIndex(u => u.id === user.id);
+    if (userIndex >= 0) {
+      const updatedUsers = [...updatedDb.users];
+      updatedUsers[userIndex] = { ...user, lastLoginAt: new Date().toISOString() };
+      updatedDb = { ...updatedDb, users: updatedUsers };
+      saveDatabase(updatedDb);
+    }
+    setDb(updatedDb);
+    setCurrentUser(user);
+    setCurrentSessionUser(user);
+    setActiveTab('dashboard');
+  };
+
+  const handleInitializeSuperAdmin = (adminUser: UserAccount, settings: SchoolSettings) => {
+    let updatedDb: AppDatabase = {
+      ...db,
+      settings,
+      users: [adminUser],
+    };
+    updatedDb = addAuditLog(
+      updatedDb,
+      adminUser,
+      'INITIAL_SETUP',
+      `Super Admin ${adminUser.fullName} initialized school profile: ${settings.schoolName}`
+    );
+    updateDatabase(updatedDb);
+    setCurrentUser(adminUser);
+    setCurrentSessionUser(adminUser);
+    setActiveTab('dashboard');
+  };
+
+  const handleLoadDemoData = () => {
+    const demoDb = resetDatabaseToDefault();
+    const admin = demoDb.users.find(u => u.role === 'super_admin') || demoDb.users[0];
+    const withLog = addAuditLog(
+      demoDb,
+      admin,
+      'DEMO_DATA_LOADED',
+      'Loaded sample Islamic school dataset (At-Tahfiz Wal Itqan Islamiyya)'
+    );
+    setDb(withLog);
+    setCurrentUser(admin);
+    setCurrentSessionUser(admin);
+    setActiveTab('dashboard');
+  };
+
+  const handleLogout = () => {
+    if (currentUser) {
+      const withLog = addAuditLog(
+        db,
+        currentUser,
+        'USER_LOGOUT',
+        `User ${currentUser.fullName} signed out`
+      );
+      updateDatabase(withLog);
+    }
+    setCurrentUser(null);
+    setCurrentSessionUser(null);
+  };
+
+  // ==========================================
+  // USER ACCOUNTS CRUD (Super Admin)
+  // ==========================================
+  const handleSaveUser = (user: UserAccount) => {
+    const existingIndex = db.users.findIndex(u => u.id === user.id);
+    let updatedUsers = [...db.users];
+    const isNew = existingIndex < 0;
+    if (!isNew) {
+      updatedUsers[existingIndex] = user;
+    } else {
+      updatedUsers = [user, ...db.users];
+    }
+    let updatedDb: AppDatabase = { ...db, users: updatedUsers };
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        isNew ? 'CREATE_USER' : 'UPDATE_USER',
+        `${isNew ? 'Created' : 'Updated'} account for ${user.fullName} (${user.role})`
+      );
+    }
+    updateDatabase(updatedDb);
+
+    // If current user modified their own profile, sync state
+    if (currentUser && currentUser.id === user.id) {
+      setCurrentUser(user);
+      setCurrentSessionUser(user);
+    }
+  };
+
+  const handleDeleteUser = (userId: string) => {
+    const target = db.users.find(u => u.id === userId);
+    const updatedUsers = db.users.filter(u => u.id !== userId);
+    let updatedDb: AppDatabase = { ...db, users: updatedUsers };
+    if (currentUser && target) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'DELETE_USER',
+        `Removed user account for ${target.fullName} (${target.email})`
+      );
+    }
+    updateDatabase(updatedDb);
+  };
+
+  // ==========================================
+  // STUDENT CRUD
+  // ==========================================
   const handleSaveStudent = (student: Student) => {
     const existingIndex = db.students.findIndex(s => s.id === student.id);
     let updatedStudents: Student[];
-    if (existingIndex >= 0) {
+    const isNew = existingIndex < 0;
+    if (!isNew) {
       updatedStudents = [...db.students];
       updatedStudents[existingIndex] = student;
     } else {
       updatedStudents = [student, ...db.students];
     }
-    updateDatabase({ ...db, students: updatedStudents });
+    let updatedDb: AppDatabase = { ...db, students: updatedStudents };
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'SAVE_STUDENT',
+        `${isNew ? 'Added student' : 'Updated student'} ${student.name} (${student.admissionNumber || student.studentId}) in ${student.className}`
+      );
+    }
+    updateDatabase(updatedDb);
   };
 
   const handleDeleteStudent = (studentInternalId: string) => {
@@ -74,15 +211,27 @@ export default function App() {
       ? (db.attendance || []).filter(a => a.studentId !== targetStudent.studentId)
       : db.attendance;
 
-    updateDatabase({
+    let updatedDb: AppDatabase = {
       ...db,
       students: updatedStudents,
       assessments: updatedAssessments,
       attendance: updatedAttendance,
-    });
+    };
+
+    if (currentUser && targetStudent) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'DELETE_STUDENT',
+        `Deleted student ${targetStudent.name} (${targetStudent.admissionNumber || targetStudent.studentId})`
+      );
+    }
+    updateDatabase(updatedDb);
   };
 
-  // Assessment Save & Recalculate Class Ranks
+  // ==========================================
+  // ASSESSMENT SAVE & RE-RANK
+  // ==========================================
   const handleSaveAssessment = (record: AssessmentRecord) => {
     // 1. Replace or insert the assessment record
     const existingIndex = db.assessments.findIndex(
@@ -121,13 +270,29 @@ export default function App() {
     );
 
     const mergedAssessments = [...otherRecords, ...rankedClassGroup];
-    updateDatabase({ ...db, assessments: mergedAssessments });
+    let updatedDb: AppDatabase = { ...db, assessments: mergedAssessments };
+
+    if (currentUser) {
+      const studentObj = db.students.find(s => s.studentId === record.studentId);
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'SAVE_ASSESSMENT',
+        `Recorded marks for ${studentObj ? studentObj.name : record.studentId} (${record.className} - Section ${record.section}) for ${record.term}`
+      );
+    }
+
+    updateDatabase(updatedDb);
   };
 
-  // Attendance Save Batch
+  // ==========================================
+  // ATTENDANCE SAVE BATCH
+  // ==========================================
   const handleSaveAttendanceBatch = (records: AttendanceRecord[]) => {
     const existing = db.attendance || [];
-    const recordMap = new Map(records.map(r => [`${r.studentId}-${r.academicSession}-${r.term}`, r]));
+    const recordMap = new Map(
+      records.map(r => [`${r.studentId}-${r.academicSession}-${r.term}`, r])
+    );
 
     const retained = existing.filter(
       r => !recordMap.has(`${r.studentId}-${r.academicSession}-${r.term}`)
@@ -148,14 +313,27 @@ export default function App() {
       return asm;
     });
 
-    updateDatabase({
+    let updatedDb: AppDatabase = {
       ...db,
       attendance: updatedAttendance,
       assessments: updatedAssessments,
-    });
+    };
+
+    if (currentUser && records.length > 0) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'SAVE_ATTENDANCE',
+        `Updated attendance batch for ${records.length} students in ${records[0].className} (${records[0].term})`
+      );
+    }
+
+    updateDatabase(updatedDb);
   };
 
-  // Student Promotion Handlers
+  // ==========================================
+  // STUDENT PROMOTION
+  // ==========================================
   const handlePromoteStudents = (
     studentIds: string[],
     toClass: string,
@@ -179,16 +357,35 @@ export default function App() {
       return s;
     });
 
-    updateDatabase({ ...db, students: updatedStudents });
+    let updatedDb: AppDatabase = { ...db, students: updatedStudents };
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'PROMOTE_STUDENTS',
+        `Promoted ${studentIds.length} students to ${toClass} (Section ${toSection})`
+      );
+    }
+    updateDatabase(updatedDb);
   };
 
-  // Bulk Import Students from Excel / Spreadsheet
+  // ==========================================
+  // SPREADSHEET IMPORT & SETUP
+  // ==========================================
   const handleImportStudents = (newStudents: Student[]) => {
     const merged = [...newStudents, ...db.students];
-    updateDatabase({ ...db, students: merged });
+    let updatedDb: AppDatabase = { ...db, students: merged };
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'IMPORT_STUDENTS',
+        `Imported ${newStudents.length} students from spreadsheet`
+      );
+    }
+    updateDatabase(updatedDb);
   };
 
-  // Auto-Add Classes & Sections detected in spreadsheet
   const handleAutoAddClasses = (newClasses: ClassItem[]) => {
     updateDatabase({ ...db, classes: [...db.classes, ...newClasses] });
   };
@@ -197,7 +394,6 @@ export default function App() {
     updateDatabase({ ...db, sections: [...db.sections, ...newSections] });
   };
 
-  // Complete Onboarding Wizard
   const handleCompleteOnboarding = (data: {
     settings: SchoolSettings;
     newClasses: ClassItem[];
@@ -209,21 +405,36 @@ export default function App() {
         ? [...data.importedStudents, ...db.students]
         : db.students;
 
-    updateDatabase({
+    let updatedDb: AppDatabase = {
       ...db,
       settings: data.settings,
       classes: data.newClasses,
       sections: data.newSections,
       students: mergedStudents,
-    });
+    };
+
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'ONBOARDING_COMPLETED',
+        `Configured school profile and imported ${data.importedStudents.length} students`
+      );
+    }
+
+    updateDatabase(updatedDb);
     setIsOnboardingOpen(false);
     setActiveTab('dashboard');
   };
 
-  // Reset to default sample database
   const handleResetDefaults = () => {
     const reset = resetDatabaseToDefault();
     setDb(reset);
+  };
+
+  const handleClearAuditLogs = () => {
+    const updated = { ...db, auditLogs: [] };
+    updateDatabase(updated);
   };
 
   // Quick action navigators
@@ -237,6 +448,28 @@ export default function App() {
     setActiveTab('reports');
   };
 
+  // ==========================================
+  // UNAUTHENTICATED USERS: SHOW LOGIN / SETUP ONLY
+  // No school information, no students, no reports, no stats
+  // ==========================================
+  if (!currentUser) {
+    return (
+      <AuthPage
+        db={db}
+        onLoginSuccess={handleLoginSuccess}
+        onInitializeSuperAdmin={handleInitializeSuperAdmin}
+        onLoadDemoData={handleLoadDemoData}
+      />
+    );
+  }
+
+  // ==========================================
+  // AUTHENTICATED USER PORTAL (Role Restricted)
+  // ==========================================
+  const isSuperAdmin = currentUser.role === 'super_admin';
+  const isTeacher = currentUser.role === 'teacher';
+  const isStaff = currentUser.role === 'staff';
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900">
       {/* Top Navigation */}
@@ -248,9 +481,9 @@ export default function App() {
           setActiveTab(tab);
         }}
         settings={db.settings}
-        onOpenOnboarding={() => setIsOnboardingOpen(true)}
-        userRole={userRole}
-        onToggleRole={() => setUserRole(prev => (prev === 'admin' ? 'teacher' : 'admin'))}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        onOpenOnboarding={isSuperAdmin ? () => setIsOnboardingOpen(true) : undefined}
       />
 
       {/* Main Container */}
@@ -258,6 +491,7 @@ export default function App() {
         {activeTab === 'dashboard' && (
           <Dashboard
             db={db}
+            currentUser={currentUser}
             setActiveTab={setActiveTab}
             onSelectAssessmentStudent={navigateToAssessment}
             onOpenOnboarding={() => setIsOnboardingOpen(true)}
@@ -267,6 +501,7 @@ export default function App() {
         {activeTab === 'students' && (
           <Students
             db={db}
+            currentUser={currentUser}
             onSaveStudent={handleSaveStudent}
             onDeleteStudent={handleDeleteStudent}
             setActiveTab={setActiveTab}
@@ -278,6 +513,7 @@ export default function App() {
         {activeTab === 'classes' && (
           <ClassView
             db={db}
+            currentUser={currentUser}
             setActiveTab={setActiveTab}
             onSelectAssessmentStudent={navigateToAssessment}
             onSelectReportStudent={navigateToReport}
@@ -287,6 +523,7 @@ export default function App() {
         {activeTab === 'assessment' && (
           <AssessmentEntry
             db={db}
+            currentUser={currentUser}
             initialStudentId={selectedAssessmentTarget?.studentId}
             initialClass={selectedAssessmentTarget?.className}
             initialSection={selectedAssessmentTarget?.section}
@@ -299,6 +536,7 @@ export default function App() {
         {activeTab === 'attendance' && (
           <AttendanceManager
             db={db}
+            currentUser={currentUser}
             onSaveAttendanceBatch={handleSaveAttendanceBatch}
           />
         )}
@@ -306,6 +544,7 @@ export default function App() {
         {activeTab === 'reports' && (
           <ReportCenter
             db={db}
+            currentUser={currentUser}
             initialStudentId={selectedReportStudentId || undefined}
           />
         )}
@@ -313,19 +552,21 @@ export default function App() {
         {activeTab === 'class-summary' && (
           <ClassSummary
             db={db}
+            currentUser={currentUser}
             setActiveTab={setActiveTab}
             onSelectReportStudent={navigateToReport}
           />
         )}
 
-        {activeTab === 'promotion' && (
+        {/* Super Admin & Authorized Staff Tabs */}
+        {activeTab === 'promotion' && (!isTeacher) && (
           <StudentPromotion
             db={db}
             onPromoteStudents={handlePromoteStudents}
           />
         )}
 
-        {activeTab === 'import-export' && (
+        {activeTab === 'import-export' && (!isTeacher) && (
           <ExcelManager
             db={db}
             onImportStudents={handleImportStudents}
@@ -334,7 +575,27 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'settings' && (
+        {/* Super Admin Only: User Accounts & Roles */}
+        {activeTab === 'users' && isSuperAdmin && (
+          <UserManagement
+            db={db}
+            currentUser={currentUser}
+            onSaveUser={handleSaveUser}
+            onDeleteUser={handleDeleteUser}
+          />
+        )}
+
+        {/* Super Admin Only: Security & Activity Audit Trail */}
+        {activeTab === 'audit-log' && isSuperAdmin && (
+          <AuditLogView
+            logs={db.auditLogs || []}
+            currentUser={currentUser}
+            onClearLogs={handleClearAuditLogs}
+          />
+        )}
+
+        {/* School Setup / Settings */}
+        {activeTab === 'settings' && (!isTeacher) && (
           <Settings
             db={db}
             onUpdateDb={updateDatabase}
@@ -344,7 +605,7 @@ export default function App() {
       </main>
 
       {/* Onboarding Wizard Modal */}
-      {isOnboardingOpen && (
+      {isOnboardingOpen && isSuperAdmin && (
         <OnboardingWizard
           db={db}
           onCompleteOnboarding={handleCompleteOnboarding}
@@ -360,7 +621,7 @@ export default function App() {
               {db.settings.arabicSchoolName || 'التحفيظ والإتقان'}
             </span>
             <span>&bull;</span>
-            <span className="font-semibold text-slate-200">{db.settings.schoolName}</span>
+            <span className="font-semibold text-slate-200">{db.settings.schoolName || 'Islamic School System'}</span>
           </div>
           <div className="text-slate-400">
             Powered by{' '}

@@ -15,10 +15,11 @@ import {
   Sparkles,
   Upload,
 } from 'lucide-react';
-import { AppDatabase, NavigationTab } from '../types';
+import { AppDatabase, NavigationTab, UserAccount } from '../types';
 
 interface DashboardProps {
   db: AppDatabase;
+  currentUser?: UserAccount;
   setActiveTab: (tab: NavigationTab) => void;
   onSelectAssessmentStudent?: (studentId: string, className: string, section: string) => void;
   onOpenOnboarding: () => void;
@@ -26,17 +27,30 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({
   db,
+  currentUser,
   setActiveTab,
   onSelectAssessmentStudent,
   onOpenOnboarding,
 }) => {
-  const [selectedSession, setSelectedSession] = useState<string>(db.settings.currentSession);
-  const [selectedTerm, setSelectedTerm] = useState<string>(db.settings.currentTerm);
-  const [selectedClass, setSelectedClass] = useState<string>('ALL');
+  const isTeacher = currentUser?.role === 'teacher';
+  const teacherClass = currentUser?.assignedClass;
+  const teacherSection = currentUser?.assignedSection;
+
+  const [selectedSession, setSelectedSession] = useState<string>(
+    currentUser?.assignedSession || db.settings.currentSession || db.sessions[0] || '2026/2027'
+  );
+  const [selectedTerm, setSelectedTerm] = useState<string>(
+    db.settings.currentTerm || db.terms[0] || '1st Term'
+  );
+  const [selectedClass, setSelectedClass] = useState<string>(
+    isTeacher && teacherClass ? teacherClass : 'ALL'
+  );
 
   // Filtered counts
   const filteredStudents = db.students.filter(s => {
-    if (selectedClass !== 'ALL' && s.className !== selectedClass) return false;
+    if (isTeacher && teacherClass && s.className !== teacherClass) return false;
+    if (isTeacher && teacherSection && s.section !== teacherSection) return false;
+    if (!isTeacher && selectedClass !== 'ALL' && s.className !== selectedClass) return false;
     return s.status === 'Active';
   });
 
@@ -111,13 +125,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={() => setActiveTab('import-export')}
-                className="bg-blue-800 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
-              >
-                <Upload className="w-4 h-4" />
-                <span>Import Spreadsheet</span>
-              </button>
+              {!isTeacher && (
+                <button
+                  onClick={() => setActiveTab('import-export')}
+                  className="bg-blue-800 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Import Spreadsheet</span>
+                </button>
+              )}
+              {isTeacher && (
+                <button
+                  onClick={() => setActiveTab('students')}
+                  className="bg-blue-800 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+                >
+                  <Users className="w-4 h-4" />
+                  <span>My Class Students</span>
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('assessment')}
                 className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
@@ -176,19 +201,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           <div>
-            <label className="block text-[11px] font-medium text-slate-500 uppercase">Class Filter</label>
-            <select
-              value={selectedClass}
-              onChange={e => setSelectedClass(e.target.value)}
-              className="mt-0.5 text-xs font-medium border border-slate-300 rounded px-2.5 py-1.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            >
-              <option value="ALL">All Classes ({db.classes.length})</option>
-              {db.classes.map(c => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <label className="block text-[11px] font-medium text-slate-500 uppercase">
+              {isTeacher ? 'Assigned Class (Locked)' : 'Class Filter'}
+            </label>
+            {isTeacher ? (
+              <div className="mt-0.5 text-xs font-bold border border-amber-300 bg-amber-50 text-amber-900 rounded px-2.5 py-1.5">
+                {teacherClass || 'Assigned Class'} {teacherSection ? `(Arm ${teacherSection})` : ''}
+              </div>
+            ) : (
+              <select
+                value={selectedClass}
+                onChange={e => setSelectedClass(e.target.value)}
+                className="mt-0.5 text-xs font-medium border border-slate-300 rounded px-2.5 py-1.5 bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value="ALL">All Classes ({db.classes.length})</option>
+                {db.classes.map(c => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
       </div>

@@ -202,7 +202,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
   const handleFinish = () => {
     const validStudents = validationResult ? validationResult.validStudents : [];
     onCompleteOnboarding({
-      settings: { ...settings, isOnboarded: true },
+      settings: { ...settings, isSetupComplete: true },
       newClasses: createdClasses,
       newSections: createdSections,
       importedStudents: validStudents,

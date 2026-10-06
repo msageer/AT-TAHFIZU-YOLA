@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AppDatabase, Student, AssessmentRecord } from '../types';
+import { AppDatabase, Student, AssessmentRecord, UserAccount } from '../types';
 import { computeClassStatistics, rankAssessments } from '../utils/ranking';
 import { ReportSheet } from './ReportSheet';
 import {
@@ -12,27 +12,41 @@ import {
   Square,
   AlertCircle,
   Download,
+  Lock,
 } from 'lucide-react';
 
 interface ReportCenterProps {
   db: AppDatabase;
+  currentUser?: UserAccount;
   initialStudentId?: string;
 }
 
-export const ReportCenter: React.FC<ReportCenterProps> = ({ db, initialStudentId }) => {
+export const ReportCenter: React.FC<ReportCenterProps> = ({
+  db,
+  currentUser,
+  initialStudentId,
+}) => {
+  const isTeacher = currentUser?.role === 'teacher';
+  const teacherClass = currentUser?.assignedClass;
+  const teacherSection = currentUser?.assignedSection;
+
   // Filters
-  const [session, setSession] = useState<string>(db.settings.currentSession);
-  const [term, setTerm] = useState<string>(db.settings.currentTerm);
+  const [session, setSession] = useState<string>(
+    currentUser?.assignedSession || db.settings.currentSession || db.sessions[0] || '2026/2027'
+  );
+  const [term, setTerm] = useState<string>(
+    db.settings.currentTerm || db.terms[0] || '1st Term'
+  );
   const [generationMode, setGenerationMode] = useState<'single-class' | 'multi-class'>(
     'single-class'
   );
 
   // Single Class Mode
   const [selectedClass, setSelectedClass] = useState<string>(
-    db.classes[0]?.name || 'Nursery One'
+    isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One')
   );
   const [selectedSection, setSelectedSection] = useState<string>(
-    db.sections[0]?.name || 'A'
+    isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A')
   );
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
     initialStudentId || 'ALL'
@@ -179,28 +193,35 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({ db, initialStudentId
             <span>Report Generation Selection Mode:</span>
           </div>
 
-          <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg text-xs font-medium">
-            <button
-              onClick={() => setGenerationMode('single-class')}
-              className={`px-3 py-1 rounded transition ${
-                generationMode === 'single-class'
-                  ? 'bg-white text-blue-900 font-bold shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Single Class / Student
-            </button>
-            <button
-              onClick={() => setGenerationMode('multi-class')}
-              className={`px-3 py-1 rounded transition ${
-                generationMode === 'multi-class'
-                  ? 'bg-white text-blue-900 font-bold shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Multiple Classes Batch
-            </button>
-          </div>
+          {!isTeacher ? (
+            <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg text-xs font-medium">
+              <button
+                onClick={() => setGenerationMode('single-class')}
+                className={`px-3 py-1 rounded transition ${
+                  generationMode === 'single-class'
+                    ? 'bg-white text-blue-900 font-bold shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Single Class / Student
+              </button>
+              <button
+                onClick={() => setGenerationMode('multi-class')}
+                className={`px-3 py-1 rounded transition ${
+                  generationMode === 'multi-class'
+                    ? 'bg-white text-blue-900 font-bold shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Multiple Classes Batch
+              </button>
+            </div>
+          ) : (
+            <div className="px-3 py-1 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 font-bold flex items-center space-x-1.5">
+              <Lock className="w-3 h-3 text-amber-600" />
+              <span>Assigned Class Report Mode</span>
+            </div>
+          )}
         </div>
 
         {/* Global Session & Term Selection */}
@@ -243,36 +264,50 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({ db, initialStudentId
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Class
+                {isTeacher ? 'Class (Locked)' : 'Class'}
               </label>
-              <select
-                value={selectedClass}
-                onChange={e => setSelectedClass(e.target.value)}
-                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
-              >
-                {db.classes.map(c => (
-                  <option key={c.id} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              {isTeacher ? (
+                <div className="w-full text-xs font-bold border border-amber-300 rounded-lg p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
+                  <span>{selectedClass}</span>
+                  <Lock className="w-3.5 h-3.5 text-amber-600" />
+                </div>
+              ) : (
+                <select
+                  value={selectedClass}
+                  onChange={e => setSelectedClass(e.target.value)}
+                  className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
+                >
+                  {db.classes.map(c => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Section
+                {isTeacher && teacherSection ? 'Section (Locked)' : 'Section'}
               </label>
-              <select
-                value={selectedSection}
-                onChange={e => setSelectedSection(e.target.value)}
-                className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
-              >
-                {db.sections.map(s => (
-                  <option key={s.id} value={s.name}>
-                    Section {s.name}
-                  </option>
-                ))}
-              </select>
+              {isTeacher && teacherSection ? (
+                <div className="w-full text-xs font-bold border border-amber-300 rounded-lg p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
+                  <span>Section {selectedSection}</span>
+                  <Lock className="w-3.5 h-3.5 text-amber-600" />
+                </div>
+              ) : (
+                <select
+                  value={selectedSection}
+                  onChange={e => setSelectedSection(e.target.value)}
+                  className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
+                >
+                  {db.sections.map(s => (
+                    <option key={s.id} value={s.name}>
+                      Section {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div>
