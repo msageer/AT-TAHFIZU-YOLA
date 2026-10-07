@@ -102,6 +102,15 @@ testConnection().catch(() => {});
 const SCHOOL_DOC_ID = 'school-main';
 
 /**
+ * Sanitizes an ID string so it can safely be used as a Firestore document path component.
+ * Slashes and special path characters are strictly replaced with underscores.
+ */
+export function toSafeDocId(rawId: string): string {
+  if (!rawId) return `doc-${Date.now()}`;
+  return String(rawId).replace(/[\/\s#\[\]\*\?]/g, '_');
+}
+
+/**
  * Deeply sanitizes data to ensure no `undefined` values exist before Firestore writes.
  * Firestore strictly rejects documents containing `undefined` properties.
  */
@@ -156,7 +165,7 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       for (const chunk of studentBatches) {
         const batch = writeBatch(db);
         chunk.forEach(student => {
-          const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', student.id);
+          const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', toSafeDocId(student.id));
           batch.set(docRef, sanitizeForFirestore(student), { merge: true });
         });
         await batch.commit();
@@ -168,8 +177,8 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       const existingFirestoreStudentDocs = await getDocs(
         collection(db, 'schools', SCHOOL_DOC_ID, 'students')
       );
-      const currentStudentIds = new Set((appDb.students || []).map(s => s.id));
-      const currentStudentCodes = new Set((appDb.students || []).map(s => s.studentId));
+      const currentStudentIds = new Set((appDb.students || []).map(s => toSafeDocId(s.id)));
+      const currentStudentCodes = new Set((appDb.students || []).map(s => toSafeDocId(s.studentId)));
       const deleteBatch = writeBatch(db);
       let delCount = 0;
       existingFirestoreStudentDocs.forEach(d => {
@@ -177,8 +186,8 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
         const matches =
           currentStudentIds.has(d.id) ||
           currentStudentCodes.has(d.id) ||
-          currentStudentIds.has(data.id) ||
-          currentStudentCodes.has(data.studentId);
+          currentStudentIds.has(toSafeDocId(data.id)) ||
+          currentStudentCodes.has(toSafeDocId(data.studentId));
         if (!matches) {
           deleteBatch.delete(d.ref);
           delCount++;
@@ -200,7 +209,7 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       for (const chunk of asmBatches) {
         const batch = writeBatch(db);
         chunk.forEach(asm => {
-          const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'assessments', asm.id);
+          const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'assessments', toSafeDocId(asm.id));
           batch.set(docRef, sanitizeForFirestore(asm), { merge: true });
         });
         await batch.commit();
@@ -216,7 +225,7 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       for (const chunk of attBatches) {
         const batch = writeBatch(db);
         chunk.forEach(att => {
-          const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'attendance', att.id);
+          const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'attendance', toSafeDocId(att.id));
           batch.set(docRef, sanitizeForFirestore(att), { merge: true });
         });
         await batch.commit();
@@ -227,7 +236,7 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
     if (appDb.users && appDb.users.length > 0) {
       const batch = writeBatch(db);
       appDb.users.forEach(user => {
-        const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'users', user.id);
+        const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'users', toSafeDocId(user.id));
         batch.set(docRef, sanitizeForFirestore(user), { merge: true });
       });
       await batch.commit();
@@ -238,13 +247,14 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       const recentLogs = appDb.auditLogs.slice(0, 100);
       const batch = writeBatch(db);
       recentLogs.forEach(log => {
-        const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'auditLogs', log.id);
+        const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'auditLogs', toSafeDocId(log.id));
         batch.set(docRef, sanitizeForFirestore(log), { merge: true });
       });
       await batch.commit();
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `schools/${SCHOOL_DOC_ID}`);
+    throw error;
   }
 }
 
@@ -258,13 +268,13 @@ export async function deleteStudentFromFirestore(
   try {
     // 1. Direct delete by internal ID
     if (studentInternalId) {
-      const studentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', studentInternalId);
+      const studentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', toSafeDocId(studentInternalId));
       await deleteDoc(studentRef).catch(() => {});
     }
 
     // 2. Direct delete by studentId
     if (studentId && studentId !== studentInternalId) {
-      const altStudentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', studentId);
+      const altStudentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', toSafeDocId(studentId));
       await deleteDoc(altStudentRef).catch(() => {});
     }
 
@@ -273,14 +283,16 @@ export async function deleteStudentFromFirestore(
     const stuSnaps = await getDocs(stuCol);
     const stuBatch = writeBatch(db);
     let stuCount = 0;
+    const safeInternal = toSafeDocId(studentInternalId);
+    const safeStudentId = studentId ? toSafeDocId(studentId) : '';
     stuSnaps.forEach(d => {
       const data = d.data();
       if (
         d.id === studentInternalId ||
-        d.id === studentId ||
+        d.id === safeInternal ||
+        (studentId && (d.id === studentId || d.id === safeStudentId)) ||
         data.id === studentInternalId ||
-        data.studentId === studentId ||
-        data.studentId === studentInternalId
+        (studentId && (data.studentId === studentId || data.studentId === studentInternalId))
       ) {
         stuBatch.delete(d.ref);
         stuCount++;
@@ -334,7 +346,7 @@ export async function deleteStudentFromFirestore(
  */
 export async function deleteAssessmentFromFirestore(assessmentId: string): Promise<void> {
   try {
-    const asmRef = doc(db, 'schools', SCHOOL_DOC_ID, 'assessments', assessmentId);
+    const asmRef = doc(db, 'schools', SCHOOL_DOC_ID, 'assessments', toSafeDocId(assessmentId));
     await deleteDoc(asmRef);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/assessments/${assessmentId}`);
@@ -346,11 +358,17 @@ export async function deleteAssessmentFromFirestore(assessmentId: string): Promi
  */
 export async function deleteUserFromFirestore(userId: string): Promise<void> {
   try {
-    const userRef = doc(db, 'schools', SCHOOL_DOC_ID, 'users', userId);
+    const userRef = doc(db, 'schools', SCHOOL_DOC_ID, 'users', toSafeDocId(userId));
     await deleteDoc(userRef);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/users/${userId}`);
   }
+}
+
+let activeSyncAccumulator: AppDatabase | null = null;
+
+export function setSyncDbSnapshot(latestDb: AppDatabase): void {
+  activeSyncAccumulator = { ...latestDb };
 }
 
 /**
@@ -367,10 +385,11 @@ export function setupRealtimeSync(
   const unsubs: Unsubscribe[] = [];
 
   // Internal accumulator of the latest cloud state
-  let currentCloudDb: AppDatabase = { ...initialLocalDb };
+  activeSyncAccumulator = { ...initialLocalDb };
 
   const notifyChange = () => {
-    onSyncUpdate({ ...currentCloudDb });
+    if (!activeSyncAccumulator) return;
+    onSyncUpdate({ ...activeSyncAccumulator });
     onStatusChange?.('synced');
   };
 
@@ -398,20 +417,20 @@ export function setupRealtimeSync(
       }
 
       const data = snapshot.data();
-      if (data) {
-        currentCloudDb = {
-          ...currentCloudDb,
+      if (data && activeSyncAccumulator) {
+        activeSyncAccumulator = {
+          ...activeSyncAccumulator,
           settings: {
-            ...currentCloudDb.settings,
+            ...activeSyncAccumulator.settings,
             ...(data.settings || {}),
           },
-          classes: data.classes || currentCloudDb.classes,
-          sections: data.sections || currentCloudDb.sections,
-          subjects: data.subjects || currentCloudDb.subjects,
-          terms: data.terms || currentCloudDb.terms,
-          sessions: data.sessions || currentCloudDb.sessions,
-          gradingBoundaries: data.gradingBoundaries || currentCloudDb.gradingBoundaries,
-          psychomotorItems: data.psychomotorItems || currentCloudDb.psychomotorItems,
+          classes: data.classes || activeSyncAccumulator.classes,
+          sections: data.sections || activeSyncAccumulator.sections,
+          subjects: data.subjects || activeSyncAccumulator.subjects,
+          terms: data.terms || activeSyncAccumulator.terms,
+          sessions: data.sessions || activeSyncAccumulator.sessions,
+          gradingBoundaries: data.gradingBoundaries || activeSyncAccumulator.gradingBoundaries,
+          psychomotorItems: data.psychomotorItems || activeSyncAccumulator.psychomotorItems,
         };
         notifyChange();
       }
@@ -428,12 +447,18 @@ export function setupRealtimeSync(
   const unsubStudents = onSnapshot(
     studentsColRef,
     snapshot => {
+      if (!activeSyncAccumulator) return;
+      if (snapshot.empty && activeSyncAccumulator.students && activeSyncAccumulator.students.length > 0) {
+        // Cloud is empty on first listen but client has local students: seed cloud
+        syncDatabaseToFirestore(activeSyncAccumulator).catch(() => {});
+        return;
+      }
       const cloudStudents: Student[] = [];
       snapshot.forEach(docSnap => {
         cloudStudents.push(docSnap.data() as Student);
       });
-      currentCloudDb = {
-        ...currentCloudDb,
+      activeSyncAccumulator = {
+        ...activeSyncAccumulator,
         students: cloudStudents,
       };
       notifyChange();
@@ -449,12 +474,18 @@ export function setupRealtimeSync(
   const unsubAssessments = onSnapshot(
     assessmentsColRef,
     snapshot => {
+      if (!activeSyncAccumulator) return;
+      if (snapshot.empty && activeSyncAccumulator.assessments && activeSyncAccumulator.assessments.length > 0) {
+        // Cloud is empty on first listen but client has local assessments: seed cloud
+        syncDatabaseToFirestore(activeSyncAccumulator).catch(() => {});
+        return;
+      }
       const cloudAssessments: AssessmentRecord[] = [];
       snapshot.forEach(docSnap => {
         cloudAssessments.push(docSnap.data() as AssessmentRecord);
       });
-      currentCloudDb = {
-        ...currentCloudDb,
+      activeSyncAccumulator = {
+        ...activeSyncAccumulator,
         assessments: cloudAssessments,
       };
       notifyChange();
@@ -470,12 +501,17 @@ export function setupRealtimeSync(
   const unsubAttendance = onSnapshot(
     attendanceColRef,
     snapshot => {
+      if (!activeSyncAccumulator) return;
+      if (snapshot.empty && activeSyncAccumulator.attendance && activeSyncAccumulator.attendance.length > 0) {
+        syncDatabaseToFirestore(activeSyncAccumulator).catch(() => {});
+        return;
+      }
       const cloudAttendance: AttendanceRecord[] = [];
       snapshot.forEach(docSnap => {
         cloudAttendance.push(docSnap.data() as AttendanceRecord);
       });
-      currentCloudDb = {
-        ...currentCloudDb,
+      activeSyncAccumulator = {
+        ...activeSyncAccumulator,
         attendance: cloudAttendance,
       };
       notifyChange();
@@ -491,13 +527,14 @@ export function setupRealtimeSync(
   const unsubUsers = onSnapshot(
     usersColRef,
     snapshot => {
+      if (!activeSyncAccumulator) return;
       if (!snapshot.empty) {
         const cloudUsers: UserAccount[] = [];
         snapshot.forEach(docSnap => {
           cloudUsers.push(docSnap.data() as UserAccount);
         });
-        currentCloudDb = {
-          ...currentCloudDb,
+        activeSyncAccumulator = {
+          ...activeSyncAccumulator,
           users: cloudUsers,
         };
         notifyChange();
@@ -514,14 +551,15 @@ export function setupRealtimeSync(
   const unsubAudit = onSnapshot(
     auditLogsColRef,
     snapshot => {
+      if (!activeSyncAccumulator) return;
       if (!snapshot.empty) {
         const cloudLogs: AuditLogEntry[] = [];
         snapshot.forEach(docSnap => {
           cloudLogs.push(docSnap.data() as AuditLogEntry);
         });
         cloudLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-        currentCloudDb = {
-          ...currentCloudDb,
+        activeSyncAccumulator = {
+          ...activeSyncAccumulator,
           auditLogs: cloudLogs,
         };
         notifyChange();
@@ -535,6 +573,7 @@ export function setupRealtimeSync(
 
   // Cleanup all listeners on unmount
   return () => {
+    activeSyncAccumulator = null;
     unsubs.forEach(unsub => unsub());
   };
 }

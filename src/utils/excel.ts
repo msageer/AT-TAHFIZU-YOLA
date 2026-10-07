@@ -9,6 +9,7 @@ import {
   SubjectScore,
 } from '../types';
 import { calculateGrade, rankAssessments } from './ranking';
+import { isSubjectApplicableToClass } from './subjectMapping';
 
 export interface ExcelValidationError {
   row: number;
@@ -675,20 +676,17 @@ export function downloadAssessmentSheetTemplate(
   const ca1Max = db.settings.ca1Max || 20;
   const ca2Max = db.settings.ca2Max || 20;
   const examMax = db.settings.examMax || 60;
-  const activeSubjects = (db.subjects || []).filter(s => s.isActive);
+  const activeSubjects = (db.subjects || []).filter(s => {
+    if (!s.isActive) return false;
+    if (targetClass) {
+      return isSubjectApplicableToClass(s, targetClass, db.classes);
+    }
+    return true;
+  });
   const subjectsToUse =
     activeSubjects.length > 0
       ? activeSubjects
-      : [
-          { id: 'sub-1', name: "Qur'an", arabicName: 'القرآن الكريم', isActive: true },
-          { id: 'sub-2', name: 'Tauhid', arabicName: 'التوحيد', isActive: true },
-          { id: 'sub-3', name: "Qira'a", arabicName: 'القراءة', isActive: true },
-          { id: 'sub-4', name: 'Hadith', arabicName: 'الحديث النبوي', isActive: true },
-          { id: 'sub-5', name: 'Fiqh', arabicName: 'الفقه الإسلامي', isActive: true },
-          { id: 'sub-6', name: 'Arabic Language', arabicName: 'اللغة العربية', isActive: true },
-          { id: 'sub-7', name: 'English Studies', arabicName: 'اللغة الإنجليزية', isActive: true },
-          { id: 'sub-8', name: 'Mathematics', arabicName: 'الرياضيات', isActive: true },
-        ];
+      : (db.subjects || []).filter(s => s.isActive);
 
   const defaultSession = db.settings.currentSession || '2026/2027';
   const defaultTerm = db.settings.currentTerm || '1st Term';

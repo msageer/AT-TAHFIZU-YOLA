@@ -23,7 +23,14 @@ import {
   Award,
   Layers,
   HeartHandshake,
+  CheckSquare,
+  Check,
+  CheckCircle2,
 } from 'lucide-react';
+import {
+  getSubjectClassAssignmentSummary,
+  isSubjectApplicableToClass,
+} from '../utils/subjectMapping';
 
 interface SettingsProps {
   db: AppDatabase;
@@ -33,8 +40,24 @@ interface SettingsProps {
 
 export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefaults }) => {
   const [activeSection, setActiveSection] = useState<
-    'school' | 'classes' | 'sections' | 'subjects' | 'grading' | 'psychomotor' | 'backup'
+    | 'school'
+    | 'classes'
+    | 'sections'
+    | 'subjects'
+    | 'subject-allocation'
+    | 'grading'
+    | 'psychomotor'
+    | 'backup'
   >('school');
+
+  // Allocation view sub-mode
+  const [allocationMode, setAllocationMode] = useState<'matrix' | 'by-class' | 'by-subject'>('matrix');
+  const [selectedAllocationClass, setSelectedAllocationClass] = useState<string>(
+    db.classes[0]?.name || ''
+  );
+  const [selectedAllocationSubjectId, setSelectedAllocationSubjectId] = useState<string>(
+    db.subjects[0]?.id || ''
+  );
 
   // In-App Confirmation Pop-up State
   const [confirmModalConfig, setConfirmModalConfig] = useState<{
@@ -268,6 +291,75 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     onUpdateDb({ ...db, subjects: updated });
   };
 
+  // Subject-to-Class Allocation handlers
+  const handleToggleSubjectClass = (subjectId: string, className: string) => {
+    const updated = subjects.map(sub => {
+      if (sub.id !== subjectId) return sub;
+      let current = sub.applicableClasses;
+      if (!current || current.length === 0 || current.includes('ALL')) {
+        current = classes.map(c => c.name);
+      }
+      let nextClasses: string[];
+      if (current.includes(className)) {
+        nextClasses = current.filter(c => c !== className);
+      } else {
+        nextClasses = [...current, className];
+      }
+      if (nextClasses.length >= classes.length && classes.length > 0) {
+        nextClasses = ['ALL'];
+      }
+      return { ...sub, applicableClasses: nextClasses };
+    });
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+  };
+
+  const handleAssignAllClassesToSubject = (subjectId: string) => {
+    const updated = subjects.map(s => (s.id === subjectId ? { ...s, applicableClasses: ['ALL'] } : s));
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification('Subject assigned to all classes.');
+  };
+
+  const handleClearAllClassesFromSubject = (subjectId: string) => {
+    const updated = subjects.map(s => (s.id === subjectId ? { ...s, applicableClasses: [] } : s));
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification('All class links removed for subject.');
+  };
+
+  const handleAssignAllSubjectsToClass = (className: string) => {
+    const updated = subjects.map(sub => {
+      let current = sub.applicableClasses;
+      if (!current || current.length === 0 || current.includes('ALL')) return sub;
+      if (!current.includes(className)) {
+        const next = [...current, className];
+        return {
+          ...sub,
+          applicableClasses: next.length >= classes.length ? ['ALL'] : next,
+        };
+      }
+      return sub;
+    });
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification(`All subjects assigned to ${className}.`);
+  };
+
+  const handleClearAllSubjectsFromClass = (className: string) => {
+    const updated = subjects.map(sub => {
+      let current = sub.applicableClasses;
+      if (!current || current.length === 0 || current.includes('ALL')) {
+        current = classes.map(c => c.name);
+      }
+      const next = current.filter(c => c !== className);
+      return { ...sub, applicableClasses: next };
+    });
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification(`All subjects unlinked from ${className}.`);
+  };
+
   // Psychomotor management handlers
   const [newPsychomotorName, setNewPsychomotorName] = useState('');
   const handleAddPsychomotor = () => {
@@ -417,6 +509,18 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
         >
           <BookOpen className="w-3.5 h-3.5" />
           <span>Subjects ({subjects.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveSection('subject-allocation')}
+          className={`px-3 py-2 font-semibold rounded-t-lg transition flex items-center space-x-1.5 ${
+            activeSection === 'subject-allocation'
+              ? 'bg-blue-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <CheckSquare className="w-3.5 h-3.5" />
+          <span>Subject-Class Allocation</span>
         </button>
 
         <button
@@ -766,48 +870,479 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                   <th className="py-2.5 px-3">#</th>
                   <th className="py-2.5 px-3">Subject Name (English)</th>
                   <th className="py-2.5 px-3 text-right">Arabic Name (المادة)</th>
+                  <th className="py-2.5 px-3">Assigned Classes</th>
                   <th className="py-2.5 px-3 text-center">Status</th>
                   <th className="py-2.5 px-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {subjects.map((sub, idx) => (
-                  <tr key={sub.id} className="hover:bg-slate-50 transition">
-                    <td className="py-2.5 px-3 text-slate-400 font-mono">{idx + 1}</td>
-                    <td className="py-2.5 px-3 font-semibold text-slate-900">{sub.name}</td>
-                    <td className="py-2.5 px-3 font-amiri font-bold text-sm text-right text-slate-900">
-                      {sub.arabicName}
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <button
-                        onClick={() => handleToggleSubject(sub.id)}
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold transition ${
-                          sub.isActive
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-slate-200 text-slate-600'
-                        }`}
-                      >
-                        {sub.isActive ? 'Active' : 'Inactive'}
-                      </button>
-                    </td>
-                    <td className="py-2.5 px-3 text-right">
-                      <button
-                        onClick={() => handleDeleteSubject(sub.id, sub.name)}
-                        className="text-slate-400 hover:text-red-600 transition p-1"
-                        title="Delete subject"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {subjects.map((sub, idx) => {
+                  const classSummary = getSubjectClassAssignmentSummary(sub, classes);
+                  return (
+                    <tr key={sub.id} className="hover:bg-slate-50 transition">
+                      <td className="py-2.5 px-3 text-slate-400 font-mono">{idx + 1}</td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-900">{sub.name}</td>
+                      <td className="py-2.5 px-3 font-amiri font-bold text-sm text-right text-slate-900">
+                        {sub.arabicName}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedAllocationSubjectId(sub.id);
+                            setAllocationMode('by-subject');
+                            setActiveSection('subject-allocation');
+                          }}
+                          className={`inline-flex items-center space-x-1.5 px-2 py-0.5 rounded text-[11px] font-semibold border transition ${
+                            classSummary.isAll
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                              : classSummary.count === 0
+                              ? 'bg-red-50 text-red-800 border-red-200 hover:bg-red-100'
+                              : 'bg-blue-50 text-blue-800 border-blue-200 hover:bg-blue-100'
+                          }`}
+                          title={`Assigned to: ${classSummary.classNames.join(', ')}. Click to configure in Subject-Class Allocation.`}
+                        >
+                          <CheckSquare className="w-3 h-3 flex-shrink-0" />
+                          <span>{classSummary.label}</span>
+                          <span className="text-[9px] opacity-75 underline ml-1">Edit</span>
+                        </button>
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <button
+                          onClick={() => handleToggleSubject(sub.id)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold transition ${
+                            sub.isActive
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {sub.isActive ? 'Active' : 'Inactive'}
+                        </button>
+                      </td>
+                      <td className="py-2.5 px-3 text-right">
+                        <button
+                          onClick={() => handleDeleteSubject(sub.id, sub.name)}
+                          className="text-slate-400 hover:text-red-600 transition p-1"
+                          title="Delete subject"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* TAB 5: GRADING & ASSESSMENT LIMITS */}
+      {/* TAB: SUBJECT-TO-CLASS ALLOCATION CONFIGURATION */}
+      {activeSection === 'subject-allocation' && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-6">
+          {/* Header & Sub-Mode Switcher */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+            <div>
+              <div className="flex items-center space-x-2">
+                <div className="p-1.5 rounded-lg bg-blue-50 text-blue-900 border border-blue-200">
+                  <CheckSquare className="w-5 h-5 text-blue-700" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Subject-to-Class Allocation Interface
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Link specific subjects to specific classes. The assessment entry form automatically filters out inapplicable subjects per class.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* View Switcher Controls */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="bg-slate-100 p-1 rounded-lg border border-slate-200 flex items-center space-x-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setAllocationMode('matrix')}
+                  className={`px-3 py-1.5 rounded-md font-semibold transition ${
+                    allocationMode === 'matrix'
+                      ? 'bg-blue-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Matrix Grid
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAllocationMode('by-class')}
+                  className={`px-3 py-1.5 rounded-md font-semibold transition ${
+                    allocationMode === 'by-class'
+                      ? 'bg-blue-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  By Class
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAllocationMode('by-subject')}
+                  className={`px-3 py-1.5 rounded-md font-semibold transition ${
+                    allocationMode === 'by-subject'
+                      ? 'bg-blue-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  By Subject
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmModalConfig({
+                    isOpen: true,
+                    title: 'Confirm Subject Allocation Save',
+                    message:
+                      'Are you sure you want to proceed and save these subject allocations across all classes? Assessment entry forms will immediately reflect this mapping.',
+                    details: `Total Classes: ${classes.length} • Total Subjects: ${subjects.length}`,
+                    variant: 'primary',
+                    confirmText: 'Yes, Save Allocation',
+                    onConfirm: () => {
+                      onUpdateDb({ ...db, subjects });
+                      showNotification('Subject-to-class allocations saved successfully!');
+                      setConfirmModalConfig(null);
+                    },
+                  });
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>Save Allocation</span>
+              </button>
+            </div>
+          </div>
+
+          {/* MODE 1: MATRIX VIEW (GRID) */}
+          {allocationMode === 'matrix' && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs text-slate-500 gap-2 bg-blue-50/60 p-3 rounded-lg border border-blue-100">
+                <span className="text-slate-700">
+                  <strong>Matrix Instruction:</strong> Check or uncheck a cell to assign or unassign a subject for that specific class. Changes update in real-time.
+                </span>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = subjects.map(s => ({ ...s, applicableClasses: ['ALL'] }));
+                      setSubjects(updated);
+                      onUpdateDb({ ...db, subjects: updated });
+                      showNotification('All subjects assigned to all classes.');
+                    }}
+                    className="px-2.5 py-1 bg-white border border-slate-300 hover:bg-slate-50 rounded text-slate-700 text-[11px] font-medium"
+                  >
+                    Select All in School
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-100 text-slate-700 font-semibold uppercase text-[11px] divide-x divide-slate-200">
+                    <tr>
+                      <th className="py-3 px-3 w-48 bg-slate-100 sticky left-0 z-10">Subject (English &amp; Arabic)</th>
+                      <th className="py-3 px-2 text-center w-24">Row Action</th>
+                      {classes.map(cls => {
+                        const countAssigned = subjects.filter(s =>
+                          isSubjectApplicableToClass(s, cls.name, classes)
+                        ).length;
+                        return (
+                          <th key={cls.id} className="py-2.5 px-3 text-center min-w-[130px]">
+                            <div className="font-bold text-slate-900">{cls.name}</div>
+                            <div className="text-[10px] text-slate-500 font-normal">
+                              {countAssigned} / {subjects.length} assigned
+                            </div>
+                            <div className="flex items-center justify-center space-x-1 mt-1 text-[10px]">
+                              <button
+                                type="button"
+                                onClick={() => handleAssignAllSubjectsToClass(cls.name)}
+                                className="text-blue-700 hover:underline px-1 py-0.5 rounded hover:bg-white"
+                                title={`Assign all subjects to ${cls.name}`}
+                              >
+                                All
+                              </button>
+                              <span className="text-slate-300">|</span>
+                              <button
+                                type="button"
+                                onClick={() => handleClearAllSubjectsFromClass(cls.name)}
+                                className="text-slate-500 hover:text-red-600 hover:underline px-1 py-0.5 rounded hover:bg-white"
+                                title={`Unlink all subjects from ${cls.name}`}
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {subjects.map((sub, sIdx) => (
+                      <tr key={sub.id} className="hover:bg-slate-50/70 divide-x divide-slate-100">
+                        <td className="py-2.5 px-3 sticky left-0 z-10 bg-white shadow-xs">
+                          <div className="font-semibold text-slate-900">{sub.name}</div>
+                          <div className="text-[11px] text-slate-500 font-amiri font-bold">
+                            {sub.arabicName}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2 text-center">
+                          <div className="flex items-center justify-center space-x-1 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => handleAssignAllClassesToSubject(sub.id)}
+                              className="text-blue-700 hover:underline px-1 py-0.5 rounded hover:bg-slate-100"
+                              title="Assign to all classes"
+                            >
+                              All
+                            </button>
+                            <span className="text-slate-300">|</span>
+                            <button
+                              type="button"
+                              onClick={() => handleClearAllClassesFromSubject(sub.id)}
+                              className="text-slate-500 hover:text-red-600 hover:underline px-1 py-0.5 rounded hover:bg-slate-100"
+                              title="Clear all classes"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </td>
+                        {classes.map(cls => {
+                          const isAssigned = isSubjectApplicableToClass(sub, cls.name, classes);
+                          return (
+                            <td
+                              key={cls.id}
+                              onClick={() => handleToggleSubjectClass(sub.id, cls.name)}
+                              className={`py-2.5 px-3 text-center cursor-pointer transition select-none ${
+                                isAssigned
+                                  ? 'bg-emerald-50/50 hover:bg-emerald-100/70 text-emerald-900'
+                                  : 'hover:bg-slate-100 text-slate-400'
+                              }`}
+                              title={`Click to ${isAssigned ? 'unassign' : 'assign'} "${sub.name}" for "${cls.name}"`}
+                            >
+                              <div className="flex items-center justify-center">
+                                <input
+                                  type="checkbox"
+                                  checked={isAssigned}
+                                  onChange={() => {}} // Handled by td onClick
+                                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer pointer-events-none"
+                                />
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* MODE 2: BY CLASS ALLOCATION */}
+          {allocationMode === 'by-class' && (
+            <div className="space-y-4">
+              {/* Class Selector Bar */}
+              <div className="flex flex-wrap items-center gap-2 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                <span className="text-xs font-bold text-slate-700 uppercase">Select Target Class:</span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {classes.map(cls => (
+                    <button
+                      key={cls.id}
+                      type="button"
+                      onClick={() => setSelectedAllocationClass(cls.name)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                        selectedAllocationClass === cls.name
+                          ? 'bg-blue-900 text-white shadow-xs'
+                          : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {cls.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Class Summary Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs">
+                <div className="flex items-center space-x-2 text-emerald-950 font-medium">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>
+                    Curriculum for <strong>{selectedAllocationClass}</strong>:{' '}
+                    <strong>
+                      {
+                        subjects.filter(s =>
+                          isSubjectApplicableToClass(s, selectedAllocationClass, classes)
+                        ).length
+                      }
+                    </strong>{' '}
+                    of {subjects.length} subjects assigned.
+                  </span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => handleAssignAllSubjectsToClass(selectedAllocationClass)}
+                    className="px-2.5 py-1 bg-white border border-emerald-300 text-emerald-900 hover:bg-emerald-100 rounded font-semibold text-xs transition"
+                  >
+                    Assign All Subjects
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleClearAllSubjectsFromClass(selectedAllocationClass)}
+                    className="px-2.5 py-1 bg-white border border-red-200 text-red-700 hover:bg-red-50 rounded font-semibold text-xs transition"
+                  >
+                    Clear All
+                  </button>
+                </div>
+              </div>
+
+              {/* Subjects Checklist for Selected Class */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {subjects.map(sub => {
+                  const isAssigned = isSubjectApplicableToClass(
+                    sub,
+                    selectedAllocationClass,
+                    classes
+                  );
+                  return (
+                    <div
+                      key={sub.id}
+                      onClick={() => handleToggleSubjectClass(sub.id, selectedAllocationClass)}
+                      className={`p-3.5 rounded-xl border cursor-pointer transition flex items-center justify-between gap-3 ${
+                        isAssigned
+                          ? 'bg-emerald-50/70 border-emerald-300 shadow-xs'
+                          : 'bg-slate-50/70 border-slate-200 hover:bg-white'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-slate-900 text-sm">{sub.name}</div>
+                        <div className="text-xs text-slate-500 font-amiri font-bold">
+                          {sub.arabicName}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 flex-shrink-0">
+                        <span
+                          className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
+                            isAssigned
+                              ? 'bg-emerald-200/70 text-emerald-900'
+                              : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {isAssigned ? 'Assigned' : 'Excluded'}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={isAssigned}
+                          onChange={() => {}} // Handled by card onClick
+                          className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 pointer-events-none"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* MODE 3: BY SUBJECT ALLOCATION */}
+          {allocationMode === 'by-subject' && (
+            <div className="space-y-4">
+              {/* Subject Selector Bar */}
+              <div className="flex flex-wrap items-center gap-2 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                <span className="text-xs font-bold text-slate-700 uppercase">Select Target Subject:</span>
+                <select
+                  value={selectedAllocationSubjectId}
+                  onChange={e => setSelectedAllocationSubjectId(e.target.value)}
+                  className="text-xs font-bold border border-slate-300 rounded-lg p-2 bg-white text-slate-900 min-w-[200px]"
+                >
+                  {subjects.map(sub => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.name} ({sub.arabicName})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {(() => {
+                const targetSub = subjects.find(s => s.id === selectedAllocationSubjectId) || subjects[0];
+                if (!targetSub) return null;
+                const summary = getSubjectClassAssignmentSummary(targetSub, classes);
+
+                return (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-base font-bold text-slate-900">{targetSub.name}</span>
+                          <span className="text-sm font-amiri font-bold text-slate-600">
+                            {targetSub.arabicName}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Currently assigned to: <strong>{summary.label}</strong> ({summary.count} of{' '}
+                          {classes.length} classes).
+                        </p>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => handleAssignAllClassesToSubject(targetSub.id)}
+                          className="px-3 py-1.5 bg-blue-800 hover:bg-blue-900 text-white rounded-lg text-xs font-semibold transition"
+                        >
+                          Assign to All Classes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleClearAllClassesFromSubject(targetSub.id)}
+                          className="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-lg text-xs font-semibold transition"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                      {classes.map(cls => {
+                        const isAssigned = isSubjectApplicableToClass(targetSub, cls.name, classes);
+                        return (
+                          <div
+                            key={cls.id}
+                            onClick={() => handleToggleSubjectClass(targetSub.id, cls.name)}
+                            className={`p-3 rounded-lg border cursor-pointer transition flex items-center justify-between ${
+                              isAssigned
+                                ? 'bg-emerald-50/70 border-emerald-300 shadow-xs'
+                                : 'bg-white border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            <span className="text-xs font-bold text-slate-900">{cls.name}</span>
+                            <input
+                              type="checkbox"
+                              checked={isAssigned}
+                              onChange={() => {}} // Handled by onClick
+                              className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 pointer-events-none"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
       {activeSection === 'grading' && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-6">
           {/* Assessment Max Limits */}

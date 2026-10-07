@@ -310,6 +310,7 @@ export function saveDatabase(db: AppDatabase): void {
     localStorage.setItem(BACKUP_STORAGE_KEY, serialized);
   } catch (err) {
     console.error('Failed to save database to localStorage:', err);
+    throw err;
   }
 }
 

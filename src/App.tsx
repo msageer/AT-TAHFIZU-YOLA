@@ -12,6 +12,7 @@ import {
   syncDatabaseToFirestore,
   deleteStudentFromFirestore,
   deleteUserFromFirestore,
+  setSyncDbSnapshot,
 } from './storage/firebase';
 import {
   AppDatabase,
@@ -27,6 +28,7 @@ import {
   UserAccount,
 } from './types';
 import { rankAssessments } from './utils/ranking';
+import { CheckCircle2, AlertTriangle, AlertOctagon, X } from 'lucide-react';
 import { AuthPage } from './components/AuthPage';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './components/Dashboard';
@@ -72,13 +74,72 @@ export default function App() {
 
   const [selectedReportStudentId, setSelectedReportStudentId] = useState<string | null>(null);
 
-  // Synchronize state with persistent storage and cloud
-  const updateDatabase = (newDb: AppDatabase) => {
-    setDb(newDb);
-    saveDatabase(newDb);
-    syncDatabaseToFirestore(newDb).catch(err => {
-      console.error('Multi-device cloud sync error:', err);
-    });
+  // User-facing database operation notifications
+  const [dbNotification, setDbNotification] = useState<{
+    type: 'success' | 'warning' | 'error';
+    message: string;
+    details?: string;
+  } | null>(null);
+
+  // Synchronize state with persistent storage and cloud with robust error catching and state preservation
+  const updateDatabase = (newDb: AppDatabase): boolean => {
+    const previousDb = db;
+    try {
+      // 1. Immediately update cloud sync accumulator so incoming snapshots don't lag
+      setSyncDbSnapshot(newDb);
+
+      // 2. Persist locally to storage (throws if storage quota is exceeded or storage is blocked)
+      saveDatabase(newDb);
+
+      // 3. Commit state into React
+      setDb(newDb);
+
+      // 4. Multi-device cloud sync with error catching
+      syncDatabaseToFirestore(newDb)
+        .then(() => {
+          setCloudSyncStatus('synced');
+        })
+        .catch(err => {
+          console.error('Multi-device cloud sync error:', err);
+          setCloudSyncStatus('offline');
+          setDbNotification({
+            type: 'warning',
+            message:
+              'Data saved safely on this device, but multi-device cloud synchronization is currently offline.',
+            details: err?.message || 'Check network connectivity or permissions.',
+          });
+        });
+
+      // 5. User-facing success feedback
+      setDbNotification({
+        type: 'success',
+        message: 'Changes saved successfully to database.',
+      });
+
+      // Auto-clear success notification after 4 seconds
+      setTimeout(() => {
+        setDbNotification(curr => (curr?.type === 'success' ? null : curr));
+      }, 4000);
+
+      return true;
+    } catch (err: any) {
+      console.error('Database save operation failed:', err);
+      // STRICT STATE PRESERVATION: Revert to previous state
+      setDb(previousDb);
+      setSyncDbSnapshot(previousDb);
+      try {
+        saveDatabase(previousDb);
+      } catch {
+        // safety fallback
+      }
+
+      setDbNotification({
+        type: 'error',
+        message: `Database save failed! Previous state has been safely preserved.`,
+        details: err?.message || 'Storage write quota or serialization error.',
+      });
+      return false;
+    }
   };
 
   // ==========================================
@@ -597,7 +658,45 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
+        {/* User-facing Database Operation Notification */}
+        {dbNotification && (
+          <div
+            className={`p-3.5 rounded-xl border flex items-start justify-between gap-3 text-xs shadow-sm transition-all animate-fadeIn ${
+              dbNotification.type === 'error'
+                ? 'bg-red-50 border-red-200 text-red-900'
+                : dbNotification.type === 'warning'
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+            }`}
+            role="alert"
+          >
+            <div className="flex items-start space-x-2.5">
+              {dbNotification.type === 'error' ? (
+                <AlertOctagon className="w-4 h-4 text-red-600 mt-0.5 flex-shrink-0" />
+              ) : dbNotification.type === 'warning' ? (
+                <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 flex-shrink-0" />
+              )}
+              <div>
+                <p className="font-semibold">{dbNotification.message}</p>
+                {dbNotification.details && (
+                  <p className="text-[11px] opacity-80 mt-0.5 font-mono">
+                    {dbNotification.details}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => setDbNotification(null)}
+              className="p-1 rounded-md hover:bg-black/5 opacity-70 hover:opacity-100 transition"
+              title="Dismiss notification"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {activeTab === 'dashboard' && (
           <Dashboard
             db={db}

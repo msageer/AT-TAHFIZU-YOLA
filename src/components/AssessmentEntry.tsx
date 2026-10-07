@@ -15,6 +15,7 @@ import {
   AssessmentSheetImportResult,
 } from '../utils/excel';
 import { ConfirmModal } from './ConfirmModal';
+import { getApplicableSubjectsForClass } from '../utils/subjectMapping';
 import {
   Save,
   CheckCircle,
@@ -30,6 +31,7 @@ import {
   Upload,
   Sparkles,
   X,
+  BookOpen,
 } from 'lucide-react';
 
 interface AssessmentEntryProps {
@@ -140,6 +142,11 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
   const [sheetImportResult, setSheetImportResult] = useState<AssessmentSheetImportResult | null>(null);
   const sheetFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Curriculum Guard: Only active subjects applicable to this class
+  const applicableSubjects = React.useMemo(() => {
+    return getApplicableSubjectsForClass(db.subjects, className, db.classes);
+  }, [db.subjects, db.classes, className]);
+
   const handleDownloadClassTemplate = () => {
     downloadAssessmentSheetTemplate(db, className, section);
   };
@@ -193,8 +200,36 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
     );
 
     if (existing) {
-      // Load existing scores
-      setSubjectScores(existing.subjectScores || []);
+      // STRICT CURRICULUM GUARD: Filter existing scores so only subjects assigned to this class are active
+      const applicableSubIds = new Set(applicableSubjects.map(s => s.id));
+      const applicableSubNames = new Set(applicableSubjects.map(s => s.name.toLowerCase().trim()));
+
+      const validScores = (existing.subjectScores || []).filter(score =>
+        applicableSubIds.has(score.subjectId) || applicableSubNames.has(score.subjectName.toLowerCase().trim())
+      );
+
+      // Ensure any applicable subject for this class missing from the existing record is added so the teacher can grade it
+      const finalScores: SubjectScore[] = [...validScores];
+      applicableSubjects.forEach(sub => {
+        const alreadyPresent = finalScores.some(
+          sc => sc.subjectId === sub.id || sc.subjectName.toLowerCase().trim() === sub.name.toLowerCase().trim()
+        );
+        if (!alreadyPresent) {
+          finalScores.push({
+            subjectId: sub.id,
+            subjectName: sub.name,
+            arabicName: sub.arabicName,
+            ca1: 0,
+            ca2: 0,
+            exam: 0,
+            total: 0,
+            grade: 'F',
+            position: '-',
+          });
+        }
+      });
+
+      setSubjectScores(finalScores);
       setDaysOpened(existing.daysOpened ?? 90);
       setDaysPresent(existing.daysPresent ?? 85);
       setPsychomotorRatings(existing.psychomotorRatings || {});
@@ -205,9 +240,8 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       setNextTermBegins(existing.nextTermBegins || '04th Muharram 1448 / 20th July 2026');
       setNextTermFees(existing.nextTermFees || '₦ 16,000');
     } else {
-      // Initialize with active subjects from setup
-      const activeSubjects = db.subjects.filter(s => s.isActive);
-      const initialScores: SubjectScore[] = activeSubjects.map(sub => ({
+      // Initialize with ONLY active subjects assigned to this class
+      const initialScores: SubjectScore[] = applicableSubjects.map(sub => ({
         subjectId: sub.id,
         subjectName: sub.name,
         arabicName: sub.arabicName,
@@ -227,7 +261,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       });
       setPsychomotorRatings(defaultPsy);
     }
-  }, [selectedStudentId, session, term, db.assessments, db.subjects, db.psychomotorItems]);
+  }, [selectedStudentId, session, term, className, db.assessments, db.subjects, db.classes, db.psychomotorItems, applicableSubjects]);
 
   // Handle score change with strict max limit validation
   const handleScoreChange = (
@@ -283,9 +317,18 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       return;
     }
 
-    const totalScore = subjectScores.reduce((sum, s) => sum + (s.total || 0), 0);
+    // STRICT CURRICULUM GUARD: Filter out any subjects not applicable to this class
+    const applicableSubIds = new Set(applicableSubjects.map(s => s.id));
+    const applicableSubNames = new Set(applicableSubjects.map(s => s.name.toLowerCase().trim()));
+    const validScoresToSave = subjectScores.filter(
+      s => applicableSubIds.has(s.subjectId) || applicableSubNames.has(s.subjectName.toLowerCase().trim())
+    );
+
+    const totalScore = validScoresToSave.reduce((sum, s) => sum + (s.total || 0), 0);
     const finalAverage =
-      subjectScores.length > 0 ? Math.round((totalScore / subjectScores.length) * 10) / 10 : 0;
+      validScoresToSave.length > 0
+        ? Math.round((totalScore / validScoresToSave.length) * 10) / 10
+        : 0;
     const daysAbsent = Math.max(0, daysOpened - daysPresent);
 
     const assessmentRecord: AssessmentRecord = {
@@ -295,7 +338,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       term,
       className,
       section,
-      subjectScores,
+      subjectScores: validScoresToSave,
       totalScore,
       finalAverage,
       daysOpened,
@@ -606,7 +649,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
 
       {/* Cognitive Marks Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-1.5">
               <Calculator className="w-4 h-4 text-emerald-600" />
@@ -616,7 +659,53 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
               Score limits: 1st CA (Max {db.settings.ca1Max}%), 2nd CA (Max {db.settings.ca2Max}%), Exam (Max {db.settings.examMax}%)
             </p>
           </div>
+
+          <div className="flex items-center space-x-2">
+            <span
+              className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
+                applicableSubjects.length > 0
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : 'bg-red-50 text-red-800 border-red-200'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>
+                {applicableSubjects.length > 0
+                  ? `${applicableSubjects.length} subjects assigned to ${className}`
+                  : `0 subjects assigned to ${className}`}
+              </span>
+            </span>
+            {currentUser?.role !== 'teacher' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('settings')}
+                className="text-[11px] font-semibold text-blue-800 hover:text-blue-950 underline px-1 py-0.5"
+                title="Configure class subjects in Settings"
+              >
+                Configure
+              </button>
+            )}
+          </div>
         </div>
+
+        {applicableSubjects.length === 0 && (
+          <div className="p-6 m-4 text-center bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900">
+            <AlertCircle className="w-8 h-8 text-amber-600 mx-auto mb-2" />
+            <p className="font-bold text-sm">No Curriculum Subjects Assigned to {className}</p>
+            <p className="text-slate-600 mt-1 max-w-md mx-auto">
+              Teachers cannot record marks for this class because no subjects are linked to <strong>{className}</strong> in settings.
+            </p>
+            {currentUser?.role !== 'teacher' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('settings')}
+                className="mt-3 px-3 py-1.5 bg-blue-900 text-white rounded-lg font-semibold hover:bg-blue-800 transition"
+              >
+                Assign Subjects in Settings &rarr; Subject Allocation
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs sm:text-sm">
