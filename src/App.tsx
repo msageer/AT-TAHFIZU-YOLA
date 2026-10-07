@@ -73,6 +73,7 @@ export default function App() {
   } | null>(null);
 
   const [selectedReportStudentId, setSelectedReportStudentId] = useState<string | null>(null);
+  const [selectedStudentForProfileId, setSelectedStudentForProfileId] = useState<string | null>(null);
 
   // User-facing database operation notifications
   const [dbNotification, setDbNotification] = useState<{
@@ -621,6 +622,20 @@ export default function App() {
     setActiveTab('reports');
   };
 
+  const handleGlobalSearchSelectStudent = (
+    student: Student,
+    action: 'profile' | 'assessment' | 'report' = 'profile'
+  ) => {
+    if (action === 'assessment') {
+      navigateToAssessment(student.studentId, student.className, student.section);
+    } else if (action === 'report') {
+      navigateToReport(student.studentId);
+    } else {
+      setSelectedStudentForProfileId(student.id || student.studentId);
+      setActiveTab('students');
+    }
+  };
+
   // ==========================================
   // UNAUTHENTICATED USERS: SHOW LOGIN / SETUP ONLY
   // No school information, no students, no reports, no stats
@@ -649,20 +664,23 @@ export default function App() {
         setActiveTab={tab => {
           if (tab !== 'assessment') setSelectedAssessmentTarget(null);
           if (tab !== 'reports') setSelectedReportStudentId(null);
+          if (tab !== 'students') setSelectedStudentForProfileId(null);
           setActiveTab(tab);
         }}
         settings={db.settings}
         currentUser={currentUser}
         onLogout={handleLogout}
         syncStatus={cloudSyncStatus}
+        students={db.students}
+        onSelectStudent={handleGlobalSearchSelectStudent}
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4 print:p-0 print:m-0 print:max-w-none print:w-full print:space-y-0">
         {/* User-facing Database Operation Notification */}
         {dbNotification && (
           <div
-            className={`p-3.5 rounded-xl border flex items-start justify-between gap-3 text-xs shadow-sm transition-all animate-fadeIn ${
+            className={`no-print p-3.5 rounded-xl border flex items-start justify-between gap-3 text-xs shadow-sm transition-all animate-fadeIn ${
               dbNotification.type === 'error'
                 ? 'bg-red-50 border-red-200 text-red-900'
                 : dbNotification.type === 'warning'
@@ -710,6 +728,8 @@ export default function App() {
           <Students
             db={db}
             currentUser={currentUser}
+            initialSelectedStudentId={selectedStudentForProfileId}
+            onClearSelectedStudentId={() => setSelectedStudentForProfileId(null)}
             onSaveStudent={handleSaveStudent}
             onDeleteStudent={handleDeleteStudent}
             onBatchDeleteStudents={handleBatchDeleteStudents}

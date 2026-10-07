@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AppDatabase, Student, StudentHistoryEntry } from '../types';
+import { getSectionsForClass } from '../utils/classSections';
 import { ConfirmModal } from './ConfirmModal';
 import {
   GraduationCap,
@@ -163,8 +164,13 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
                 <select
                   value={fromClass}
                   onChange={e => {
-                    setFromClass(e.target.value);
+                    const newFrom = e.target.value;
+                    setFromClass(newFrom);
                     setSelectedStudentIds([]);
+                    const validFromSecs = getSectionsForClass(newFrom, db.classes, db.sections);
+                    if (fromSection !== 'ALL' && !validFromSecs.includes(fromSection)) {
+                      setFromSection('ALL');
+                    }
                   }}
                   className="w-full text-xs font-bold border border-slate-300 rounded p-2 bg-white"
                 >
@@ -187,9 +193,9 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
                   className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-white"
                 >
                   <option value="ALL">All Sections</option>
-                  {db.sections.map(s => (
-                    <option key={s.id} value={s.name}>
-                      Section {s.name}
+                  {getSectionsForClass(fromClass, db.classes, db.sections).map(secName => (
+                    <option key={secName} value={secName}>
+                      Section {secName}
                     </option>
                   ))}
                 </select>
@@ -215,7 +221,14 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
                 <label className="block text-[11px] font-medium text-slate-500 uppercase">Target Class</label>
                 <select
                   value={toClass}
-                  onChange={e => setToClass(e.target.value)}
+                  onChange={e => {
+                    const newTo = e.target.value;
+                    setToClass(newTo);
+                    const validToSecs = getSectionsForClass(newTo, db.classes, db.sections);
+                    if (!validToSecs.includes(toSection)) {
+                      setToSection(validToSecs[0] || 'A');
+                    }
+                  }}
                   className="w-full text-xs font-bold border border-emerald-300 rounded p-2 bg-white text-emerald-950"
                 >
                   {db.classes.map(c => (
@@ -233,9 +246,9 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
                   onChange={e => setToSection(e.target.value)}
                   className="w-full text-xs font-semibold border border-emerald-300 rounded p-2 bg-white text-emerald-950"
                 >
-                  {db.sections.map(s => (
-                    <option key={s.id} value={s.name}>
-                      Section {s.name}
+                  {getSectionsForClass(toClass, db.classes, db.sections).map(secName => (
+                    <option key={secName} value={secName}>
+                      Section {secName}
                     </option>
                   ))}
                 </select>

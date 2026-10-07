@@ -115,10 +115,10 @@ export function getEmptyDatabase(): AppDatabase {
       lastBackupAt: undefined,
     },
     classes: [
-      { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main' },
-      { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main' },
-      { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main' },
-      { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main' },
+      { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main', sections: ['A'] },
+      { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main', sections: ['A'] },
+      { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main', sections: ['A', 'B'] },
+      { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main', sections: ['A', 'B'] },
     ],
     sections: [
       { id: 'sec-1', name: 'A', schoolId: 'school-main' },

@@ -16,6 +16,7 @@ import {
 } from '../utils/excel';
 import { ConfirmModal } from './ConfirmModal';
 import { getApplicableSubjectsForClass } from '../utils/subjectMapping';
+import { getSectionsForClass } from '../utils/classSections';
 import {
   Save,
   CheckCircle,
@@ -79,11 +80,26 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       ? teacherClass
       : (initialClass || db.classes[0]?.name || 'Nursery One')
   );
+
+  // Applicable sections for this specific class (not all classes have A and B)
+  const classSections = React.useMemo(() => {
+    return getSectionsForClass(className, db.classes, db.sections);
+  }, [className, db.classes, db.sections]);
+
   const [section, setSection] = useState<string>(
     isTeacher && teacherSection
       ? teacherSection
-      : (initialSection || db.sections[0]?.name || 'A')
+      : (initialSection && classSections.includes(initialSection)
+          ? initialSection
+          : (classSections[0] || 'A'))
   );
+
+  // Synchronize section if current section is not valid for this class
+  useEffect(() => {
+    if (classSections.length > 0 && !classSections.includes(section)) {
+      setSection(classSections[0]);
+    }
+  }, [className, classSections]);
 
   // Available students in current class and section
   const eligibleStudents = db.students.filter(
@@ -547,9 +563,9 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
                 onChange={e => setSection(e.target.value)}
                 className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-slate-50 focus:bg-white text-slate-900"
               >
-                {db.sections.map(s => (
-                  <option key={s.id} value={s.name}>
-                    Section {s.name}
+                {classSections.map(secName => (
+                  <option key={secName} value={secName}>
+                    Section {secName}
                   </option>
                 ))}
               </select>

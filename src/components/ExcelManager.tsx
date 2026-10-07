@@ -24,6 +24,7 @@ import {
   FlexibleImportResult,
   AssessmentSheetImportResult,
 } from '../utils/excel';
+import { getSectionsForClass } from '../utils/classSections';
 import {
   FileSpreadsheet,
   Download,
@@ -463,7 +464,16 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
                   </label>
                   <select
                     value={assessmentTemplateClass}
-                    onChange={e => setAssessmentTemplateClass(e.target.value)}
+                    onChange={e => {
+                      const newCls = e.target.value;
+                      setAssessmentTemplateClass(newCls);
+                      if (newCls) {
+                        const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
+                        if (assessmentTemplateSection && !validSecs.includes(assessmentTemplateSection)) {
+                          setAssessmentTemplateSection('');
+                        }
+                      }
+                    }}
                     className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-white"
                   >
                     <option value="">Blank Template (Includes Sample Rows)</option>
@@ -486,9 +496,9 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
                       className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-white"
                     >
                       <option value="">All Sections</option>
-                      {db.sections.map(s => (
-                        <option key={s.id} value={s.name}>
-                          Section {s.name}
+                      {getSectionsForClass(assessmentTemplateClass, db.classes, db.sections).map(secName => (
+                        <option key={secName} value={secName}>
+                          Section {secName}
                         </option>
                       ))}
                     </select>
@@ -986,7 +996,14 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
                 <label className="block font-bold text-slate-700 uppercase mb-1">Class</label>
                 <select
                   value={broadsheetClass}
-                  onChange={e => setBroadsheetClass(e.target.value)}
+                  onChange={e => {
+                    const newCls = e.target.value;
+                    setBroadsheetClass(newCls);
+                    const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
+                    if (!validSecs.includes(broadsheetSection)) {
+                      setBroadsheetSection(validSecs[0] || 'A');
+                    }
+                  }}
                   className="w-full border border-slate-300 rounded p-2 bg-white"
                 >
                   {db.classes.map(c => (
@@ -1004,9 +1021,9 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
                   onChange={e => setBroadsheetSection(e.target.value)}
                   className="w-full border border-slate-300 rounded p-2 bg-white"
                 >
-                  {db.sections.map(s => (
-                    <option key={s.id} value={s.name}>
-                      Section {s.name}
+                  {getSectionsForClass(broadsheetClass, db.classes, db.sections).map(secName => (
+                    <option key={secName} value={secName}>
+                      Section {secName}
                     </option>
                   ))}
                 </select>

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AppDatabase, Student, AssessmentRecord, UserAccount } from '../types';
 import { computeClassStatistics, rankAssessments } from '../utils/ranking';
+import { getSectionsForClass } from '../utils/classSections';
 import { ReportSheet } from './ReportSheet';
 import {
   FileText,
@@ -45,9 +46,23 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
   const [selectedClass, setSelectedClass] = useState<string>(
     isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One')
   );
+
+  // Applicable arms/sections for selected class (not all classes have A and B)
+  const classSections = useMemo(() => {
+    return getSectionsForClass(selectedClass, db.classes, db.sections);
+  }, [selectedClass, db.classes, db.sections]);
+
   const [selectedSection, setSelectedSection] = useState<string>(
     isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A')
   );
+
+  // Synchronize section if current selection is not valid for this class
+  useEffect(() => {
+    if (classSections.length > 0 && !classSections.includes(selectedSection)) {
+      setSelectedSection(classSections[0]);
+    }
+  }, [selectedClass, classSections, selectedSection]);
+
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
     initialStudentId || 'ALL'
   );
@@ -149,10 +164,36 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     });
   }
 
-  // Print function
-  const handlePrint = () => {
-    window.print();
+  // Dedicated state for printing single vs all students
+  const [printSingleStudentId, setPrintSingleStudentId] = useState<string | null>(null);
+
+  // Trigger print for all currently selected report sheets
+  const handlePrintAll = () => {
+    setPrintSingleStudentId(null);
+    setTimeout(() => {
+      window.print();
+    }, 50);
   };
+
+  // Trigger print for a specific individual student's report card
+  const handlePrintSingle = (studentId?: string) => {
+    if (!studentId || studentId === 'ALL') {
+      handlePrintAll();
+      return;
+    }
+    setPrintSingleStudentId(studentId);
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => {
+        setPrintSingleStudentId(null);
+      }, 500);
+    }, 50);
+  };
+
+  // Filter reports if single print is active
+  const reportsToRender = printSingleStudentId
+    ? reportsToGenerate.filter(item => item.student.studentId === printSingleStudentId)
+    : reportsToGenerate;
 
   return (
     <div className="space-y-6">
@@ -161,7 +202,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
         <div>
           <h2 className="text-xl font-bold text-slate-900">Report Center &amp; Printing</h2>
           <p className="text-xs text-slate-500">
-            Generate authentic A4 portrait Islamic school report sheets with cognitive domains, psychomotor ratings, and attendance.
+            Generate authentic A4 portrait Islamic school report sheets with cognitive domains, psychomotor ratings, and attendance. Fits strictly on single A4 pages.
           </p>
         </div>
 
@@ -172,15 +213,16 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
             className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
           >
             <Eye className="w-4 h-4" />
-            <span>Preview Report ({reportsToGenerate.length})</span>
+            <span>Preview ({reportsToGenerate.length})</span>
           </button>
           <button
-            onClick={handlePrint}
+            onClick={handlePrintAll}
             disabled={reportsToGenerate.length === 0}
-            className="bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+            className="bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow-md shadow-blue-900/20 active:scale-95 cursor-pointer"
+            title="Print printer-friendly A4 portrait student report card(s)"
           >
             <Printer className="w-4 h-4" />
-            <span>Print / Save PDF</span>
+            <span>Print {reportsToGenerate.length > 1 ? `All Reports (${reportsToGenerate.length})` : 'Report Card'}</span>
           </button>
         </div>
       </div>
@@ -274,7 +316,14 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
               ) : (
                 <select
                   value={selectedClass}
-                  onChange={e => setSelectedClass(e.target.value)}
+                  onChange={e => {
+                    const newCls = e.target.value;
+                    setSelectedClass(newCls);
+                    const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
+                    if (!validSecs.includes(selectedSection)) {
+                      setSelectedSection(validSecs[0] || 'A');
+                    }
+                  }}
                   className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
                 >
                   {db.classes.map(c => (
@@ -301,9 +350,9 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                   onChange={e => setSelectedSection(e.target.value)}
                   className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
                 >
-                  {db.sections.map(s => (
-                    <option key={s.id} value={s.name}>
-                      Section {s.name}
+                  {classSections.map(secName => (
+                    <option key={secName} value={secName}>
+                      Section {secName}
                     </option>
                   ))}
                 </select>
@@ -314,18 +363,32 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                 Student Selection
               </label>
-              <select
-                value={selectedStudentId}
-                onChange={e => setSelectedStudentId(e.target.value)}
-                className="w-full text-xs font-bold border border-slate-300 rounded-lg p-2 bg-white text-slate-900"
-              >
-                <option value="ALL">ALL STUDENTS IN THIS CLASS ({singleClassStudents.length})</option>
-                {singleClassStudents.map(s => (
-                  <option key={s.id} value={s.studentId}>
-                    {s.name} ({s.studentId})
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center space-x-2">
+                <select
+                  value={selectedStudentId}
+                  onChange={e => setSelectedStudentId(e.target.value)}
+                  className="flex-1 text-xs font-bold border border-slate-300 rounded-lg p-2 bg-white text-slate-900"
+                >
+                  <option value="ALL">ALL STUDENTS IN THIS CLASS ({singleClassStudents.length})</option>
+                  {singleClassStudents.map(s => (
+                    <option key={s.id} value={s.studentId}>
+                      {s.name} ({s.studentId})
+                    </option>
+                  ))}
+                </select>
+                {selectedStudentId !== 'ALL' && (
+                  <button
+                    type="button"
+                    onClick={() => handlePrintSingle(selectedStudentId)}
+                    disabled={reportsToGenerate.length === 0}
+                    className="px-3 py-2 bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition flex items-center space-x-1 shadow-sm flex-shrink-0"
+                    title="Print this student's report card on single A4 page"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -381,7 +444,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
             student report sheet(s).
           </div>
           <div className="text-[11px] text-blue-800">
-            Click <strong>Preview Report</strong> to inspect on screen, or <strong>Print / Save PDF</strong> to output high quality A4 documents.
+            Formatted strictly for single A4 portrait paper pages with zero multi-page spills.
           </div>
         </div>
       </div>
@@ -399,22 +462,39 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
 
       {/* Inline Preview / Print Render Area */}
       <div className="space-y-8 print:space-y-0">
-        {reportsToGenerate.map((item, idx) => (
-          <div key={item.student.id} className="relative">
+        {reportsToRender.map((item, idx) => (
+          <div key={item.student.id} className="report-sheet-page relative">
             {/* Header info bar on screen only */}
-            <div className="no-print max-w-[210mm] mx-auto mb-2 flex items-center justify-between text-xs text-slate-500">
+            <div className="no-print max-w-[200mm] mx-auto mb-2 flex items-center justify-between text-xs text-slate-600 bg-slate-100 p-2.5 rounded-lg border border-slate-200 shadow-sm">
               <span className="font-semibold">
-                Page {idx + 1} of {reportsToGenerate.length}: {item.student.name} ({item.student.className})
+                Report {idx + 1} of {reportsToRender.length}:{' '}
+                <strong className="text-slate-900 font-bold">{item.student.name}</strong>{' '}
+                <span className="text-slate-500">
+                  ({item.student.className}{item.student.section ? ` - ${item.student.section}` : ''})
+                </span>
               </span>
-              <button
-                onClick={() => {
-                  setSelectedStudentId(item.student.studentId);
-                  setIsPreviewOpen(true);
-                }}
-                className="text-blue-700 hover:underline font-semibold"
-              >
-                Inspect Modal Preview
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => handlePrintSingle(item.student.studentId)}
+                  className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold px-3 py-1.5 rounded-md transition flex items-center space-x-1.5 shadow-sm active:scale-95"
+                  title={`Print ${item.student.name}'s report sheet on a single A4 page`}
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Report</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedStudentId(item.student.studentId);
+                    setIsPreviewOpen(true);
+                  }}
+                  className="text-slate-700 hover:text-slate-900 hover:bg-white text-xs font-semibold px-2.5 py-1.5 rounded-md border border-slate-300 transition flex items-center space-x-1"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Preview</span>
+                </button>
+              </div>
             </div>
 
             {/* The Authentic Islamic School Report Sheet Component */}
@@ -447,17 +527,17 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                   A4 Print-Ready Report Sheet Preview
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Showing {reportsToGenerate.length} report(s) matching authentic Islamic school format.
+                  Showing {reportsToGenerate.length} report(s) matching authentic Islamic school format (single A4 page each).
                 </p>
               </div>
 
               <div className="flex items-center space-x-2 mr-6">
                 <button
-                  onClick={handlePrint}
-                  className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+                  onClick={handlePrintAll}
+                  className="bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Print All / Save PDF</span>
+                  <span>Print Report Sheet (A4)</span>
                 </button>
               </div>
             </div>

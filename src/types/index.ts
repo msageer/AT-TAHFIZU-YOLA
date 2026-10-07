@@ -67,6 +67,7 @@ export interface ClassItem {
   schoolId?: string;
   name: string;
   order: number;
+  sections?: string[]; // Specific sections/arms for this class e.g. ['A'], ['A', 'B'], ['Tahfiz'], or ['Single Arm']
 }
 
 export interface SectionItem {

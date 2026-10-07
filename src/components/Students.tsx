@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Student, AppDatabase, NavigationTab, UserAccount } from '../types';
 import { ConfirmModal } from './ConfirmModal';
+import { getSectionsForClass } from '../utils/classSections';
 import {
   Search,
   Plus,
@@ -21,6 +22,8 @@ import {
 interface StudentsProps {
   db: AppDatabase;
   currentUser?: UserAccount;
+  initialSelectedStudentId?: string | null;
+  onClearSelectedStudentId?: () => void;
   onSaveStudent: (student: Student) => void;
   onDeleteStudent: (studentId: string) => void;
   onBatchDeleteStudents?: (studentIds: string[]) => void;
@@ -32,6 +35,8 @@ interface StudentsProps {
 export const Students: React.FC<StudentsProps> = ({
   db,
   currentUser,
+  initialSelectedStudentId,
+  onClearSelectedStudentId,
   onSaveStudent,
   onDeleteStudent,
   onBatchDeleteStudents,
@@ -57,6 +62,22 @@ export const Students: React.FC<StudentsProps> = ({
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [selectedStudentForProfile, setSelectedStudentForProfile] = useState<Student | null>(null);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+
+  // Jump to student profile when opened via Global Search
+  useEffect(() => {
+    if (initialSelectedStudentId) {
+      const match = db.students.find(
+        s =>
+          s.id === initialSelectedStudentId ||
+          s.studentId.toLowerCase() === initialSelectedStudentId.toLowerCase()
+      );
+      if (match) {
+        setFilterClass(match.className);
+        setFilterSection('ALL');
+        setSelectedStudentForProfile(match);
+      }
+    }
+  }, [initialSelectedStudentId, db.students]);
 
   // In-App Confirmation Pop-up State
   const [confirmModalConfig, setConfirmModalConfig] = useState<{
@@ -366,9 +387,12 @@ export const Students: React.FC<StudentsProps> = ({
               className="w-full text-xs border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="ALL">All Sections</option>
-              {db.sections.map(s => (
-                <option key={s.id} value={s.name}>
-                  Section {s.name}
+              {(filterClass === 'ALL'
+                ? db.sections.map(s => s.name)
+                : getSectionsForClass(filterClass, db.classes, db.sections)
+              ).map(secName => (
+                <option key={secName} value={secName}>
+                  Section {secName}
                 </option>
               ))}
             </select>
@@ -688,7 +712,17 @@ export const Students: React.FC<StudentsProps> = ({
                   </label>
                   <select
                     value={formData.className}
-                    onChange={e => setFormData({ ...formData, className: e.target.value })}
+                    onChange={e => {
+                      const newCls = e.target.value;
+                      const validSections = getSectionsForClass(newCls, db.classes, db.sections);
+                      setFormData(prev => ({
+                        ...prev,
+                        className: newCls,
+                        section: validSections.includes(prev.section || '')
+                          ? (prev.section || 'A')
+                          : validSections[0] || 'A',
+                      }));
+                    }}
                     className="w-full text-xs border border-slate-300 rounded p-2 bg-white"
                   >
                     {db.classes.map(c => (
@@ -701,18 +735,20 @@ export const Students: React.FC<StudentsProps> = ({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                    Section *
+                    Section / Arm *
                   </label>
                   <select
                     value={formData.section}
                     onChange={e => setFormData({ ...formData, section: e.target.value })}
                     className="w-full text-xs border border-slate-300 rounded p-2 bg-white"
                   >
-                    {db.sections.map(s => (
-                      <option key={s.id} value={s.name}>
-                        {s.name}
-                      </option>
-                    ))}
+                    {getSectionsForClass(formData.className || '', db.classes, db.sections).map(
+                      secName => (
+                        <option key={secName} value={secName}>
+                          Section {secName}
+                        </option>
+                      )
+                    )}
                   </select>
                 </div>
 
@@ -829,7 +865,10 @@ export const Students: React.FC<StudentsProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 relative animate-in fade-in zoom-in-95">
             <button
-              onClick={() => setSelectedStudentForProfile(null)}
+              onClick={() => {
+                setSelectedStudentForProfile(null);
+                onClearSelectedStudentId?.();
+              }}
               className="absolute right-4 top-4 text-slate-400 hover:text-slate-700"
             >
               <X className="w-5 h-5" />

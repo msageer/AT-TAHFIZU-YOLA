@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { AppDatabase, NavigationTab, UserAccount } from '../types';
 import { computeGpaDistribution, PerformanceBucket } from '../utils/ranking';
+import { AttendanceSummaryDashboard } from './AttendanceSummaryDashboard';
 
 interface DashboardProps {
   db: AppDatabase;
@@ -612,6 +613,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         )}
       </div>
+
+      {/* School-Wide Visual Attendance Trends Dashboard (Recharts Bar Chart) */}
+      <AttendanceSummaryDashboard
+        db={db}
+        selectedSession={selectedSession}
+        selectedTerm={selectedTerm}
+        currentUser={currentUser}
+        onNavigateToAttendance={() => setActiveTab('attendance')}
+      />
 
       {/* Class Assessment Status Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">

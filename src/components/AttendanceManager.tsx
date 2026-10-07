@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppDatabase, AttendanceRecord, Student, UserAccount } from '../types';
 import { exportAttendanceToExcel } from '../utils/excel';
+import { getSectionsForClass } from '../utils/classSections';
 import { ConfirmModal } from './ConfirmModal';
 import {
   CalendarCheck,
@@ -39,6 +40,18 @@ export const AttendanceManager: React.FC<AttendanceManagerProps> = ({
   const [selectedSection, setSelectedSection] = useState<string>(
     isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A')
   );
+
+  // Applicable arms/sections for selected class (not all classes have A and B)
+  const classSections = React.useMemo(() => {
+    return getSectionsForClass(selectedClass, db.classes, db.sections);
+  }, [selectedClass, db.classes, db.sections]);
+
+  // Synchronize section if current selection is not valid for this class
+  useEffect(() => {
+    if (classSections.length > 0 && !classSections.includes(selectedSection)) {
+      setSelectedSection(classSections[0]);
+    }
+  }, [selectedClass, classSections, selectedSection]);
 
   // Global default days opened for fast batch application
   const [defaultDaysOpened, setDefaultDaysOpened] = useState<number>(90);
@@ -282,7 +295,14 @@ export const AttendanceManager: React.FC<AttendanceManagerProps> = ({
             ) : (
               <select
                 value={selectedClass}
-                onChange={e => setSelectedClass(e.target.value)}
+                onChange={e => {
+                  const newCls = e.target.value;
+                  setSelectedClass(newCls);
+                  const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
+                  if (!validSecs.includes(selectedSection)) {
+                    setSelectedSection(validSecs[0] || 'A');
+                  }
+                }}
                 className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-slate-50 text-slate-900"
               >
                 {db.classes.map(c => (
@@ -309,9 +329,9 @@ export const AttendanceManager: React.FC<AttendanceManagerProps> = ({
                 onChange={e => setSelectedSection(e.target.value)}
                 className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-slate-50 text-slate-900"
               >
-                {db.sections.map(s => (
-                  <option key={s.id} value={s.name}>
-                    Section {s.name}
+                {classSections.map(secName => (
+                  <option key={secName} value={secName}>
+                    Section {secName}
                   </option>
                 ))}
               </select>

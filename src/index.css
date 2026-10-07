@@ -9,17 +9,44 @@
 @media print {
   @page {
     size: A4 portrait;
-    margin: 8mm 6mm;
+    margin: 4mm 5mm 4mm 5mm;
   }
 
-  body {
-    background-color: white !important;
-    color: black !important;
-    print-color-adjust: exact;
-    -webkit-print-color-adjust: exact;
+  html, body {
+    width: 210mm !important;
+    height: auto !important;
+    min-height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    print-color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+    -moz-print-color-adjust: exact !important;
   }
 
-  .no-print {
+  #root, main {
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  .min-h-screen {
+    min-height: auto !important;
+    height: auto !important;
+    background: #ffffff !important;
+  }
+
+  /* Strictly suppress all non-print interface components */
+  .no-print,
+  nav,
+  header,
+  footer,
+  aside,
+  button,
+  .toast,
+  [role="alert"] {
     display: none !important;
   }
 
@@ -27,9 +54,51 @@
     display: block !important;
   }
 
-  .page-break {
+  /* Single A4 page constraint with zero multi-page spill */
+  .report-sheet-page {
+    width: 200mm !important;
+    max-width: 200mm !important;
+    height: 285mm !important;
+    max-height: 285mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    page-break-before: auto !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
     page-break-after: always !important;
     break-after: page !important;
+    overflow: hidden !important;
+    position: relative !important;
+    background: #ffffff !important;
+  }
+
+  .report-sheet-page:not(:last-child) {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  .report-sheet-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  .report-sheet-root {
+    width: 100% !important;
+    max-width: 200mm !important;
+    height: 100% !important;
+    max-height: 285mm !important;
+    margin: 0 auto !important;
+    padding: 2.5mm 3mm !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
   }
 
   .print-container {
@@ -37,6 +106,22 @@
     margin: 0 !important;
     padding: 0 !important;
     box-shadow: none !important;
+  }
+
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  th, td {
+    border-color: #000000 !important;
   }
 }
 

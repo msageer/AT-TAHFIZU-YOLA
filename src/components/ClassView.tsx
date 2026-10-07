@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { AppDatabase, NavigationTab, UserAccount } from '../types';
+import { getSectionsForClass } from '../utils/classSections';
 import {
   Users,
   CheckCircle,
@@ -41,6 +42,18 @@ export const ClassView: React.FC<ClassViewProps> = ({
   const [selectedSection, setSelectedSection] = useState<string>(
     isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A')
   );
+
+  // Applicable arms/sections for selected class (not all classes have A and B)
+  const classSections = useMemo(() => {
+    return getSectionsForClass(selectedClass, db.classes, db.sections);
+  }, [selectedClass, db.classes, db.sections]);
+
+  // Synchronize section if current selection is not valid for this class
+  useEffect(() => {
+    if (classSections.length > 0 && !classSections.includes(selectedSection)) {
+      setSelectedSection(classSections[0]);
+    }
+  }, [selectedClass, classSections, selectedSection]);
 
   // Filter students for this class and section
   const classStudents = db.students.filter(
@@ -133,7 +146,14 @@ export const ClassView: React.FC<ClassViewProps> = ({
             ) : (
               <select
                 value={selectedClass}
-                onChange={e => setSelectedClass(e.target.value)}
+                onChange={e => {
+                  const newCls = e.target.value;
+                  setSelectedClass(newCls);
+                  const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
+                  if (!validSecs.includes(selectedSection)) {
+                    setSelectedSection(validSecs[0] || 'A');
+                  }
+                }}
                 className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white text-slate-900"
               >
                 {db.classes.map(c => (
@@ -160,9 +180,9 @@ export const ClassView: React.FC<ClassViewProps> = ({
                 onChange={e => setSelectedSection(e.target.value)}
                 className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white text-slate-900"
               >
-                {db.sections.map(s => (
-                  <option key={s.id} value={s.name}>
-                    Section {s.name}
+                {classSections.map(secName => (
+                  <option key={secName} value={secName}>
+                    Section {secName}
                   </option>
                 ))}
               </select>

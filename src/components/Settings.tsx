@@ -26,11 +26,18 @@ import {
   CheckSquare,
   Check,
   CheckCircle2,
+  Edit2,
+  X,
+  Users,
 } from 'lucide-react';
 import {
   getSubjectClassAssignmentSummary,
   isSubjectApplicableToClass,
 } from '../utils/subjectMapping';
+import {
+  cascadeRenameClass,
+  getClassSections,
+} from '../utils/classSections';
 
 interface SettingsProps {
   db: AppDatabase;
@@ -163,6 +170,87 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
 
   // Class management handlers
   const [newClassName, setNewClassName] = useState('');
+  const [newClassSections, setNewClassSections] = useState<string[]>(['A', 'B']);
+
+  // Class edit state
+  const [editingClass, setEditingClass] = useState<ClassItem | null>(null);
+  const [editClassName, setEditClassName] = useState('');
+  const [editClassOrder, setEditClassOrder] = useState<number>(1);
+  const [editClassSections, setEditClassSections] = useState<string[]>(['A']);
+  const [newArmName, setNewArmName] = useState('');
+
+  const handleStartEditClass = (cls: ClassItem) => {
+    setEditingClass(cls);
+    setEditClassName(cls.name);
+    setEditClassOrder(cls.order || 1);
+    setEditClassSections(getClassSections(cls, sections));
+    setNewArmName('');
+  };
+
+  const handleToggleEditSection = (secName: string) => {
+    if (editClassSections.includes(secName)) {
+      if (editClassSections.length === 1) {
+        showNotification('A class must have at least one section or arm', 'error');
+        return;
+      }
+      setEditClassSections(prev => prev.filter(s => s !== secName));
+    } else {
+      setEditClassSections(prev => [...prev, secName]);
+    }
+  };
+
+  const handleAddCustomArmToClass = () => {
+    const trimmed = newArmName.trim();
+    if (!trimmed) return;
+    if (editClassSections.includes(trimmed)) {
+      showNotification(`Arm "${trimmed}" already included in this class`, 'error');
+      return;
+    }
+    setEditClassSections(prev => [...prev, trimmed]);
+    setNewArmName('');
+  };
+
+  const handleSaveEditClass = () => {
+    if (!editingClass || !editClassName.trim()) return;
+    const oldName = editingClass.name;
+    const newName = editClassName.trim();
+    const finalSections = editClassSections.length > 0 ? editClassSections : ['A'];
+
+    const enrolledStudents = db.students.filter(
+      s => s.className.toLowerCase().trim() === oldName.toLowerCase().trim()
+    );
+
+    const proceedSave = () => {
+      const updatedDb = cascadeRenameClass(
+        db,
+        oldName,
+        newName,
+        finalSections,
+        editClassOrder
+      );
+      setClasses(updatedDb.classes);
+      onUpdateDb(updatedDb);
+      setEditingClass(null);
+      showNotification(`Class "${newName}" configuration updated successfully!`);
+      setConfirmModalConfig(null);
+    };
+
+    if (oldName.toLowerCase().trim() !== newName.toLowerCase().trim()) {
+      setConfirmModalConfig({
+        isOpen: true,
+        title: 'Confirm Class Renaming & Cascade',
+        message: `Are you sure you want to rename class "${oldName}" to "${newName}"? All ${enrolledStudents.length} enrolled student records, attendance data, and assessment broadsheets will be updated automatically.`,
+        details: `Class: ${oldName} \u2192 ${newName} \u2022 Arms: ${finalSections.join(', ')}`,
+        variant: 'primary',
+        confirmText: 'Yes, Rename & Update All',
+        onConfirm: proceedSave,
+      });
+      return;
+    }
+
+    proceedSave();
+  };
+
   const handleAddClass = () => {
     if (!newClassName.trim()) return;
     const exists = classes.some(c => c.name.toLowerCase() === newClassName.trim().toLowerCase());
@@ -174,6 +262,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
       id: `cls-${Date.now()}`,
       name: newClassName.trim(),
       order: classes.length + 1,
+      sections: newClassSections.length > 0 ? newClassSections : ['A'],
     };
     const updated = [...classes, newClass];
     setClasses(updated);
@@ -734,18 +823,45 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                 Add, edit, or remove classes. Classes configured here dynamically appear in all dropdowns, student records, and reports.
               </p>
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
               <input
                 type="text"
                 value={newClassName}
                 onChange={e => setNewClassName(e.target.value)}
                 placeholder="New class name, e.g. JSS Three"
-                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-48 sm:w-60 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-48 sm:w-56 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 onKeyDown={e => e.key === 'Enter' && handleAddClass()}
               />
+              {/* Quick Arms Selection for New Class */}
+              <div className="flex items-center space-x-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setNewClassSections(['A'])}
+                  className={`px-2 py-1 text-[11px] font-bold rounded transition ${
+                    newClassSections.length === 1 && newClassSections[0] === 'A'
+                      ? 'bg-blue-900 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Class carries single arm (Section A only)"
+                >
+                  Single Arm (A)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewClassSections(['A', 'B'])}
+                  className={`px-2 py-1 text-[11px] font-bold rounded transition ${
+                    newClassSections.length === 2 && newClassSections.includes('A') && newClassSections.includes('B')
+                      ? 'bg-blue-900 text-white shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Class carries both Arms A and B"
+                >
+                  Arms A &amp; B
+                </button>
+              </div>
               <button
                 onClick={handleAddClass}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1 shadow-xs"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Add Class</span>
@@ -754,27 +870,240 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-3">
-            {classes.map((cls, idx) => (
-              <div
-                key={cls.id}
-                className="flex items-center justify-between p-3 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-white transition"
-              >
-                <div className="flex items-center space-x-2.5">
-                  <span className="w-6 h-6 rounded bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center">
-                    {idx + 1}
-                  </span>
-                  <span className="text-sm font-semibold text-slate-900">{cls.name}</span>
-                </div>
-                <button
-                  onClick={() => handleDeleteClass(cls.id, cls.name)}
-                  className="text-slate-400 hover:text-red-600 p-1 transition"
-                  title="Delete class"
+            {classes.map((cls, idx) => {
+              const classArms = getClassSections(cls, sections);
+              const enrolledCount = db.students.filter(
+                s => s.className.toLowerCase().trim() === cls.name.toLowerCase().trim()
+              ).length;
+
+              return (
+                <div
+                  key={cls.id}
+                  className="flex flex-col justify-between p-3.5 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white transition space-y-2.5 shadow-xs"
                 >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center space-x-2.5">
+                      <span className="w-6 h-6 rounded bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center flex-shrink-0">
+                        {cls.order || idx + 1}
+                      </span>
+                      <div>
+                        <span className="text-sm font-bold text-slate-900 block leading-tight">
+                          {cls.name}
+                        </span>
+                        <span className="text-[11px] text-slate-500 font-medium">
+                          {enrolledCount} enrolled student{enrolledCount === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleStartEditClass(cls)}
+                        className="px-2 py-1 text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 rounded-lg text-[11px] font-bold transition flex items-center space-x-1 border border-blue-200 shadow-2xs"
+                        title="Edit class name, sort order, and specific arms/sections"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        <span>Edit Arms</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteClass(cls.id, cls.name)}
+                        className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded transition"
+                        title="Delete class"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section / Arms Pills */}
+                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs">
+                    <div className="flex items-center space-x-1 flex-wrap gap-1">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase mr-1">Arms:</span>
+                      {classArms.map(secName => (
+                        <span
+                          key={secName}
+                          className="px-2 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-bold border border-blue-200"
+                        >
+                          Section {secName}
+                        </span>
+                      ))}
+                    </div>
+                    {classArms.length === 1 && (
+                      <span className="text-[10px] text-slate-500 font-medium italic">Single Arm</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
+
+          {/* EDIT CLASS MODAL */}
+          {editingClass && (
+            <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center space-x-2">
+                    <div className="p-2 bg-blue-50 text-blue-800 rounded-lg">
+                      <Edit2 className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Edit Class Configuration
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Customize class name, display order, and specific arms/sections.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setEditingClass(null)}
+                    className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-4 text-xs">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                      Class Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={editClassName}
+                      onChange={e => setEditClassName(e.target.value)}
+                      className="w-full text-sm font-semibold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="e.g. Primary One"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      If renamed, all enrolled students and assessment records will update automatically.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                      Class Sort Order
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={editClassOrder}
+                      onChange={e => setEditClassOrder(Number(e.target.value) || 1)}
+                      className="w-24 text-sm font-bold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-bold text-slate-700 uppercase">
+                        Arms &amp; Sections for this Class *
+                      </label>
+                      <div className="flex items-center space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEditClassSections(['A'])}
+                          className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold transition"
+                        >
+                          Single Arm (A only)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditClassSections(['A', 'B'])}
+                          className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold transition"
+                        >
+                          Arms A &amp; B
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mb-2">
+                      Not all classes have both A and B. Select only the sections applicable to {editClassName || 'this class'}.
+                    </p>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {sections.map(sec => {
+                        const isChecked = editClassSections.includes(sec.name);
+                        return (
+                          <button
+                            key={sec.id}
+                            type="button"
+                            onClick={() => handleToggleEditSection(sec.name)}
+                            className={`p-2 rounded-lg border text-xs font-bold flex items-center justify-between transition ${
+                              isChecked
+                                ? 'bg-blue-50 border-blue-400 text-blue-900 shadow-2xs'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span>Section {sec.name}</span>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {}}
+                              className="w-3.5 h-3.5 text-blue-600 rounded pointer-events-none"
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Add Custom Arm input for specialized streams (Tahfiz, Islamiyya, etc.) */}
+                    <div className="mt-3 flex items-center space-x-2">
+                      <input
+                        type="text"
+                        value={newArmName}
+                        onChange={e => setNewArmName(e.target.value)}
+                        placeholder="Add custom arm, e.g. Tahfiz"
+                        className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 flex-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAddCustomArmToClass())}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddCustomArmToClass}
+                        className="bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition"
+                      >
+                        Add Arm
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Data Preservation Warning */}
+                  <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-blue-900 text-xs flex items-center space-x-2">
+                    <Users className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                    <span>
+                      <strong>Safe Edit:</strong> Updating this class will automatically keep all{' '}
+                      <strong>
+                        {
+                          db.students.filter(
+                            s => s.className.toLowerCase().trim() === editingClass.name.toLowerCase().trim()
+                          ).length
+                        }
+                      </strong>{' '}
+                      student profiles, marks, and broadsheets synchronized.
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setEditingClass(null)}
+                    className="px-4 py-2 border border-slate-300 text-slate-700 font-semibold text-xs rounded-lg hover:bg-slate-50 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveEditClass}
+                    className="px-4 py-2 bg-blue-900 hover:bg-blue-800 text-white font-semibold text-xs rounded-lg shadow-sm transition flex items-center space-x-1.5"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save Class Changes</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
