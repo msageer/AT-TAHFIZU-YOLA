@@ -145,6 +145,12 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
   const [formTeacherComment, setFormTeacherComment] = useState<string>(
     'Good academic progress and exemplary conduct.'
   );
+  const [headTeacherName, setHeadTeacherName] = useState<string>(
+    db.settings.headTeacherName || 'Ustaz Al-Amin Kaigama'
+  );
+  const [headTeacherComment, setHeadTeacherComment] = useState<string>(
+    'A commendable academic performance. Strive to maintain this standard.'
+  );
   const [promotionRemark, setPromotionRemark] = useState<string>('PASS & PROMOTED');
   const [schoolCloses, setSchoolCloses] = useState<string>('24th Dhul Hijjah 1447 / 10th June 2026');
   const [nextTermBegins, setNextTermBegins] = useState<string>('04th Muharram 1448 / 20th July 2026');
@@ -260,16 +266,34 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       const matchedClass = db.classes.find(
         c => c.name.toLowerCase().trim() === className.toLowerCase().trim()
       );
+      const termCfg = db.settings.termSettings?.[term];
       const defaultFees =
+        matchedClass?.termFees?.[term] ||
+        termCfg?.classFees?.[className] ||
         matchedClass?.nextTermFees ||
+        termCfg?.defaultFees ||
         db.settings.classFees?.[className] ||
         db.settings.defaultNextTermFees ||
         '₦ 16,000';
       const defaultSchoolCloses =
-        db.settings.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026';
+        termCfg?.schoolCloses ||
+        db.settings.schoolCloses ||
+        '24th Dhul Hijjah 1447 / 10th June 2026';
       const defaultNextTermBegins =
-        db.settings.nextTermBegins || '04th Muharram 1448 / 20th July 2026';
+        termCfg?.nextTermBegins ||
+        db.settings.nextTermBegins ||
+        '04th Muharram 1448 / 20th July 2026';
+
+      // Auto resolve form teacher from available roles in db.users or class
+      const assignedTeacherUser = db.users?.find(
+        u =>
+          (u.role === 'teacher' || u.role === 'staff') &&
+          u.assignedClass?.toLowerCase().trim() === className.toLowerCase().trim() &&
+          (!section || !u.assignedSection || u.assignedSection.toUpperCase() === section.toUpperCase()) &&
+          u.status !== 'disabled'
+      );
       const defaultTeacher =
+        assignedTeacherUser?.fullName ||
         matchedClass?.classTeacherName ||
         (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');
 
@@ -279,6 +303,8 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       setPsychomotorRatings(existing.psychomotorRatings || {});
       setFormTeacherName(existing.formTeacherName || defaultTeacher);
       setFormTeacherComment(existing.formTeacherComment || 'Good academic progress.');
+      setHeadTeacherName(existing.headTeacherName || db.settings.headTeacherName || 'Ustaz Al-Amin Kaigama');
+      setHeadTeacherComment(existing.headTeacherComment || 'A commendable academic performance. Strive to maintain this standard.');
       setPromotionRemark(existing.promotionRemark || 'PASS & PROMOTED');
       setSchoolCloses(existing.schoolCloses || defaultSchoolCloses);
       setNextTermBegins(existing.nextTermBegins || defaultNextTermBegins);
@@ -287,16 +313,33 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       const matchedClass = db.classes.find(
         c => c.name.toLowerCase().trim() === className.toLowerCase().trim()
       );
+      const termCfg = db.settings.termSettings?.[term];
       const defaultFees =
+        matchedClass?.termFees?.[term] ||
+        termCfg?.classFees?.[className] ||
         matchedClass?.nextTermFees ||
+        termCfg?.defaultFees ||
         db.settings.classFees?.[className] ||
         db.settings.defaultNextTermFees ||
         '₦ 16,000';
       const defaultSchoolCloses =
-        db.settings.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026';
+        termCfg?.schoolCloses ||
+        db.settings.schoolCloses ||
+        '24th Dhul Hijjah 1447 / 10th June 2026';
       const defaultNextTermBegins =
-        db.settings.nextTermBegins || '04th Muharram 1448 / 20th July 2026';
+        termCfg?.nextTermBegins ||
+        db.settings.nextTermBegins ||
+        '04th Muharram 1448 / 20th July 2026';
+
+      const assignedTeacherUser = db.users?.find(
+        u =>
+          (u.role === 'teacher' || u.role === 'staff') &&
+          u.assignedClass?.toLowerCase().trim() === className.toLowerCase().trim() &&
+          (!section || !u.assignedSection || u.assignedSection.toUpperCase() === section.toUpperCase()) &&
+          u.status !== 'disabled'
+      );
       const defaultTeacher =
+        assignedTeacherUser?.fullName ||
         matchedClass?.classTeacherName ||
         (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');
 
@@ -322,12 +365,14 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       setPsychomotorRatings(defaultPsy);
       setFormTeacherName(defaultTeacher);
       setFormTeacherComment('Good academic progress.');
+      setHeadTeacherName(db.settings.headTeacherName || 'Ustaz Al-Amin Kaigama');
+      setHeadTeacherComment('A commendable academic performance. Strive to maintain this standard.');
       setPromotionRemark('PASS & PROMOTED');
       setSchoolCloses(defaultSchoolCloses);
       setNextTermBegins(defaultNextTermBegins);
       setNextTermFees(defaultFees);
     }
-  }, [selectedStudentId, session, term, className, db.assessments, db.subjects, db.classes, db.psychomotorItems, applicableSubjects]);
+  }, [selectedStudentId, session, term, className, section, db.assessments, db.subjects, db.classes, db.psychomotorItems, db.settings, db.users, applicableSubjects, currentUser]);
 
   // Handle score change with strict max limit validation
   const handleScoreChange = (
@@ -413,6 +458,8 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
       psychomotorRatings,
       formTeacherName,
       formTeacherComment,
+      headTeacherName,
+      headTeacherComment,
       promotionRemark,
       schoolCloses,
       nextTermBegins,
@@ -1017,6 +1064,55 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
                 &ldquo;{preset.slice(0, 38)}...&rdquo;
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Head Teacher / Headmaster Evaluation */}
+        <div className="pt-3 border-t border-slate-100 space-y-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Head Teacher / Headmaster Name
+            </label>
+            <input
+              type="text"
+              value={headTeacherName}
+              onChange={e => setHeadTeacherName(e.target.value)}
+              className="w-full text-xs font-semibold border border-slate-300 rounded p-2"
+              placeholder="e.g. Ustaz Al-Amin Kaigama"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-700 uppercase">
+                Head Teacher / Headmaster Comment
+              </label>
+              <div className="text-[11px] text-slate-400">Principal / Headmaster remark</div>
+            </div>
+            <input
+              type="text"
+              value={headTeacherComment}
+              onChange={e => setHeadTeacherComment(e.target.value)}
+              className="w-full text-xs italic border border-slate-300 rounded p-2.5 focus:ring-1 focus:ring-blue-500"
+              placeholder="Headmaster's assessment remark..."
+            />
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {[
+                'A commendable academic performance. Strive to maintain this standard.',
+                'Good performance. Continue working hard next term.',
+                'Satisfactory result. Put in more effort in weaker subjects.',
+                'Outstanding result. Excellent conduct throughout the term.',
+              ].map((preset, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setHeadTeacherComment(preset)}
+                  className="text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-0.5 rounded transition line-clamp-1 max-w-xs text-left"
+                >
+                  &ldquo;{preset.slice(0, 38)}...&rdquo;
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 

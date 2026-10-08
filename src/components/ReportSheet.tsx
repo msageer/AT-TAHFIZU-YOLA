@@ -1,5 +1,5 @@
-import React from 'react';
-import { SchoolSettings, Student, AssessmentRecord, GradeBoundary, PsychomotorItem, ClassItem } from '../types';
+import React, { useMemo } from 'react';
+import { SchoolSettings, Student, AssessmentRecord, GradeBoundary, PsychomotorItem, ClassItem, UserAccount } from '../types';
 import { ClassStatistics } from '../utils/ranking';
 import { formatClassWithSection } from '../utils/classSections';
 
@@ -11,6 +11,7 @@ interface ReportSheetProps {
   gradingBoundaries: GradeBoundary[];
   psychomotorItems: PsychomotorItem[];
   classes?: ClassItem[];
+  users?: UserAccount[];
 }
 
 export const ReportSheet: React.FC<ReportSheetProps> = ({
@@ -21,21 +22,41 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   gradingBoundaries,
   psychomotorItems,
   classes = [],
+  users = [],
 }) => {
   const subjectScores = assessment.subjectScores || [];
   const isCompact = subjectScores.length > 8;
 
   // Resolve per-class school fees and teacher information from settings / class configuration
   const targetClassName = assessment.className || student.className;
+  const studentSection = assessment.section || student.section;
+  const cleanClassName = (targetClassName || '').toLowerCase().trim();
+
   const matchedClass = classes.find(
-    c => c.name.toLowerCase().trim() === (targetClassName || '').toLowerCase().trim()
+    c => c.name.toLowerCase().trim() === cleanClassName
   );
 
   // Term-specific calendar and school fees resolution
   const studentTerm = assessment.term || settings.currentTerm || '1st Term';
   const termCfg = settings.termSettings?.[studentTerm];
 
-  const resolvedFees =
+  // Helper to format fee currency cleanly
+  const formatFeeDisplay = (val?: string | number): string => {
+    if (!val) return '₦ 16,000';
+    const s = String(val).trim();
+    if (!s) return '₦ 16,000';
+    if (s.startsWith('₦') || s.startsWith('$') || s.toLowerCase().startsWith('ngn')) {
+      return s;
+    }
+    const num = Number(s.replace(/[^0-9.]/g, ''));
+    if (!isNaN(num) && num > 0) {
+      return `₦ ${num.toLocaleString()}`;
+    }
+    return s;
+  };
+
+  // Fees automatically fetched from term fees added on school setup / class setup
+  const rawFees =
     matchedClass?.termFees?.[studentTerm] ||
     termCfg?.classFees?.[targetClassName] ||
     matchedClass?.nextTermFees ||
@@ -45,6 +66,9 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
     settings.defaultNextTermFees ||
     '₦ 16,000';
 
+  const resolvedFees = formatFeeDisplay(rawFees);
+
+  // Next term dates automatically fetched from term settings on school setup
   const resolvedSchoolCloses =
     termCfg?.schoolCloses ||
     settings.schoolCloses ||
@@ -57,14 +81,86 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
     assessment.nextTermBegins ||
     '04th Muharram 1448 / 20th July 2026';
 
-  const resolvedFormTeacher =
-    assessment.formTeacherName ||
-    matchedClass?.classTeacherName ||
-    'Class Form Teacher';
+  // Automatically fetch Form Teacher's name from available roles in school setup
+  const resolvedFormTeacher = useMemo(() => {
+    // 1. Direct match: Teacher from users with role 'teacher' or 'staff' assigned to this class and section
+    if (users && users.length > 0) {
+      if (studentSection) {
+        const teacherWithSection = users.find(
+          u =>
+            (u.role === 'teacher' || u.role === 'staff') &&
+            u.assignedClass?.toLowerCase().trim() === cleanClassName &&
+            u.assignedSection?.toUpperCase().trim() === studentSection.toUpperCase().trim() &&
+            u.status !== 'disabled'
+        );
+        if (teacherWithSection?.fullName?.trim()) {
+          return teacherWithSection.fullName.trim();
+        }
+      }
 
-  const resolvedHeadTeacher =
-    settings.headTeacherName ||
-    'Ustaz Al-Amin Kaigama';
+      // 2. Teacher from users assigned to this class
+      const teacherForClass = users.find(
+        u =>
+          (u.role === 'teacher' || u.role === 'staff') &&
+          u.assignedClass?.toLowerCase().trim() === cleanClassName &&
+          u.status !== 'disabled'
+      );
+      if (teacherForClass?.fullName?.trim()) {
+        return teacherForClass.fullName.trim();
+      }
+    }
+
+    // 3. Class configuration form teacher from School Setup -> Classes
+    if (matchedClass?.classTeacherName?.trim()) {
+      return matchedClass.classTeacherName.trim();
+    }
+
+    // 4. Assessment record saved form teacher name (if customized)
+    if (
+      assessment.formTeacherName &&
+      assessment.formTeacherName.trim() &&
+      assessment.formTeacherName.trim().toLowerCase() !== 'class form teacher'
+    ) {
+      return assessment.formTeacherName.trim();
+    }
+
+    // 5. Any active teacher account in available roles
+    if (users && users.length > 0) {
+      const anyTeacher = users.find(u => u.role === 'teacher' && u.status !== 'disabled');
+      if (anyTeacher?.fullName?.trim()) {
+        return anyTeacher.fullName.trim();
+      }
+    }
+
+    return 'Class Form Teacher';
+  }, [users, studentSection, cleanClassName, matchedClass, assessment.formTeacherName]);
+
+  // Automatically fetch Head Teacher / Headmaster name from school settings or administration
+  const resolvedHeadTeacher = useMemo(() => {
+    // 1. Configured in School Setup settings
+    if (settings.headTeacherName && settings.headTeacherName.trim()) {
+      return settings.headTeacherName.trim();
+    }
+    // 2. Custom override on student assessment record
+    if (assessment.headTeacherName && assessment.headTeacherName.trim()) {
+      return assessment.headTeacherName.trim();
+    }
+    // 3. Registered super admin or head staff
+    if (users && users.length > 0) {
+      const superAdmin = users.find(u => u.role === 'super_admin' && u.status !== 'disabled');
+      if (superAdmin?.fullName?.trim()) {
+        return superAdmin.fullName.trim();
+      }
+    }
+    return 'Ustaz Al-Amin Kaigama';
+  }, [settings.headTeacherName, assessment.headTeacherName, users]);
+
+  const resolvedHeadTeacherComment = useMemo(() => {
+    if (assessment.headTeacherComment && assessment.headTeacherComment.trim()) {
+      return assessment.headTeacherComment.trim();
+    }
+    return 'A commendable academic performance. Strive to maintain this standard.';
+  }, [assessment.headTeacherComment]);
 
   return (
     <div className="report-sheet-root relative bg-white text-black p-2.5 sm:p-3 mx-auto font-sans leading-tight border-2 border-black rounded-none shadow-sm w-full max-w-[200mm] min-h-[280mm] max-h-[285mm] box-border print:border-2 print:border-black print:p-2 print:shadow-none print:w-full print:h-full print:max-h-[285mm] overflow-hidden flex flex-col justify-between">
@@ -364,26 +460,29 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
         </div>
 
         {/* Teacher Information & School Closing / Resumption Box */}
-        <div className="border-2 border-slate-900 text-[10px] sm:text-[11px] p-1 space-y-0.5 mb-0.5">
+        <div className="border-2 border-slate-900 text-[10px] sm:text-[10.5px] p-1 space-y-0.5 mb-0.5">
           {/* Remark / Promotion */}
           <div className="flex items-center border-b border-slate-900 pb-0.5">
-            <span className="font-extrabold uppercase text-slate-950 w-36">Remark:</span>
+            <span className="font-extrabold uppercase text-slate-950 w-44">Remark:</span>
             <span className="font-black uppercase tracking-wider text-xs text-slate-950 bg-slate-100 px-1.5 py-0.2 border border-slate-800">
               {assessment.promotionRemark || 'PASS & PROMOTED'}
             </span>
           </div>
 
-          {/* Form Teacher Name */}
+          {/* Form Teacher Name & Signature */}
           <div className="flex items-center border-b border-slate-300 pb-0.5">
-            <span className="font-bold uppercase text-slate-950 w-44">FORM TEACHER&apos;S NAME:</span>
+            <span className="font-bold uppercase text-slate-950 w-48">FORM TEACHER&apos;S NAME:</span>
             <span className="font-bold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
               {resolvedFormTeacher}
+            </span>
+            <span className="font-bold text-[9px] uppercase text-slate-700 ml-2 whitespace-nowrap">
+              Sign / Stamp: ________________
             </span>
           </div>
 
           {/* Form Teacher Comment */}
           <div className="flex items-start border-b border-slate-300 pb-0.5">
-            <span className="font-bold uppercase text-slate-950 w-44 pt-0.2">
+            <span className="font-bold uppercase text-slate-950 w-48 pt-0.2">
               FORM TEACHER&apos;S COMMENT:
             </span>
             <span className="font-semibold italic text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 leading-tight truncate">
@@ -391,9 +490,9 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             </span>
           </div>
 
-          {/* Head Teacher Name & Signature */}
+          {/* Head Teacher / Headmaster Name & Signature */}
           <div className="flex items-center border-b border-slate-300 pb-0.5">
-            <span className="font-bold uppercase text-slate-950 w-44">HEAD TEACHER&apos;S NAME:</span>
+            <span className="font-bold uppercase text-slate-950 w-48">HEAD TEACHER / HEADMASTER:</span>
             <span className="font-bold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
               {resolvedHeadTeacher}
             </span>
@@ -402,28 +501,36 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             </span>
           </div>
 
-          {/* School Closes */}
-          <div className="flex items-center border-b border-slate-300 pb-0.5">
-            <span className="font-bold uppercase text-slate-950 w-44">School closes:</span>
-            <span className="font-semibold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
-              {resolvedSchoolCloses}
+          {/* Head Teacher Comment */}
+          <div className="flex items-start border-b border-slate-300 pb-0.5">
+            <span className="font-bold uppercase text-slate-950 w-48 pt-0.2">
+              HEAD TEACHER&apos;S COMMENT:
+            </span>
+            <span className="font-semibold italic text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 leading-tight truncate">
+              {resolvedHeadTeacherComment}
             </span>
           </div>
 
-          {/* Next Term Begins */}
-          <div className="flex items-center border-b border-slate-300 pb-0.5">
-            <span className="font-bold uppercase text-slate-950 w-44">NEXT TERM BEGINS:</span>
-            <span className="font-semibold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
-              {resolvedNextTermBegins}
-            </span>
-          </div>
-
-          {/* Next Term Fees */}
-          <div className="flex items-center">
-            <span className="font-bold uppercase text-slate-950 w-44">NEXT TERM SCHOOL FEES:</span>
-            <span className="font-bold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1">
-              {resolvedFees}
-            </span>
+          {/* School Closes, Next Term Begins & Next Term Fees */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1 pt-0.5 text-[9.5px] sm:text-[10px]">
+            <div className="flex items-center">
+              <span className="font-bold uppercase text-slate-950 mr-1 whitespace-nowrap">School closes:</span>
+              <span className="font-semibold text-slate-950 border-b border-dotted border-slate-500 truncate flex-1">
+                {resolvedSchoolCloses}
+              </span>
+            </div>
+            <div className="flex items-center">
+              <span className="font-bold uppercase text-slate-950 mr-1 whitespace-nowrap">NEXT TERM BEGINS:</span>
+              <span className="font-bold text-slate-950 border-b border-dotted border-slate-500 truncate flex-1">
+                {resolvedNextTermBegins}
+              </span>
+            </div>
+            <div className="flex items-center">
+              <span className="font-bold uppercase text-slate-950 mr-1 whitespace-nowrap">NEXT TERM FEES:</span>
+              <span className="font-black text-slate-950 border-b border-dotted border-slate-500 truncate flex-1">
+                {resolvedFees}
+              </span>
+            </div>
           </div>
         </div>
 

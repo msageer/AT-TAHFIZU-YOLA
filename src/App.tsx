@@ -13,6 +13,8 @@ import {
   deleteStudentFromFirestore,
   deleteUserFromFirestore,
   setSyncDbSnapshot,
+  isQuotaExhausted,
+  isQuotaExceededError,
 } from './storage/firebase';
 import {
   AppDatabase,
@@ -98,17 +100,17 @@ export default function App() {
       // 4. Multi-device cloud sync with error catching
       syncDatabaseToFirestore(newDb)
         .then(() => {
-          setCloudSyncStatus('synced');
+          if (isQuotaExhausted()) {
+            setCloudSyncStatus('offline');
+          } else {
+            setCloudSyncStatus('synced');
+          }
         })
         .catch(err => {
-          console.error('Multi-device cloud sync error:', err);
           setCloudSyncStatus('offline');
-          setDbNotification({
-            type: 'warning',
-            message:
-              'Data saved safely on this device, but multi-device cloud synchronization is currently offline.',
-            details: err?.message || 'Check network connectivity or permissions.',
-          });
+          if (!isQuotaExceededError(err)) {
+            console.warn('Multi-device cloud sync offline:', err);
+          }
         });
 
       // 5. User-facing success feedback

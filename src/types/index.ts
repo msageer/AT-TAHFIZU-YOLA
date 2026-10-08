@@ -185,9 +185,11 @@ export interface AssessmentRecord {
   // Psychomotor ratings (item id -> grade letter e.g. A, B, C)
   psychomotorRatings: Record<string, string>;
 
-  // Form Teacher & School Term details
+  // Form Teacher, Headmaster & School Term details
   formTeacherName: string;
   formTeacherComment: string;
+  headTeacherName?: string;
+  headTeacherComment?: string;
   promotionRemark: string; // e.g. "PASS & PROMOTED", "PASS & REPEAT"
   schoolCloses: string;
   nextTermBegins: string;

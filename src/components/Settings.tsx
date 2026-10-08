@@ -234,6 +234,13 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     showNotification(`Applied ${feeToApply} to all classes in ${selectedTermSettingsTab}`);
   };
 
+  const handleUpdateClassTeacherDirect = (classId: string, teacherName: string) => {
+    const updated = classes.map(c =>
+      c.id === classId ? { ...c, classTeacherName: teacherName } : c
+    );
+    setClasses(updated);
+  };
+
   // Notifications
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(
     null
@@ -1100,23 +1107,84 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                   Opening (resumption) dates, closing (vacation) dates, and school fees for each class can differ per term (1st Term, 2nd Term, 3rd Term). Report cards dynamically display the dates and fees matching that specific term.
                 </p>
 
-                {/* Head Teacher / Principal Name */}
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                    Head Teacher / Principal Name (Applies to all reports)
-                  </label>
-                  <input
-                    type="text"
-                    value={schoolSettings.headTeacherName || ''}
-                    onChange={e =>
-                      setSchoolSettings({ ...schoolSettings, headTeacherName: e.target.value })
-                    }
-                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
-                    placeholder="e.g. Ustaz Al-Amin Kaigama"
-                  />
-                  <span className="text-[10px] text-slate-400 mt-0.5 block">
-                    Printed on report cards under HEAD TEACHER&apos;S NAME with signature line.
+                {/* Head Teacher / Headmaster Name */}
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-800 uppercase">
+                      Head Teacher / Headmaster Name (Applies to all reports)
+                    </label>
+                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                      Auto-fetched on Report Sheet
+                    </span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <select
+                      value={schoolSettings.headTeacherName || ''}
+                      onChange={e =>
+                        setSchoolSettings({ ...schoolSettings, headTeacherName: e.target.value })
+                      }
+                      className="w-full sm:w-1/2 text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                    >
+                      <option value="">-- Select from registered staff / leadership --</option>
+                      {availableTeachers.map(t => (
+                        <option key={t.id} value={t.name}>
+                          {t.name} ({t.role.replace('_', ' ')})
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={schoolSettings.headTeacherName || ''}
+                      onChange={e =>
+                        setSchoolSettings({ ...schoolSettings, headTeacherName: e.target.value })
+                      }
+                      className="w-full sm:w-1/2 text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                      placeholder="Or type custom Head Teacher / Headmaster name"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-500 block">
+                    Printed on student report sheets under &quot;HEAD TEACHER / HEADMASTER&quot; alongside signature/stamp line.
                   </span>
+                </div>
+
+                {/* Class / Form Teachers Quick Assignment */}
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-1.5">
+                      <UserCheck className="w-4 h-4 text-blue-600" />
+                      <h5 className="text-xs font-bold text-slate-900 uppercase">
+                        Class / Form Teachers Quick Assignment
+                      </h5>
+                    </div>
+                    <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                      Auto-fetched on Report Sheet by Class
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Assign the class form teacher for each class. Report sheets automatically display the assigned teacher&apos;s name and signature line for each student in that class.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                    {classes.map(cls => (
+                      <div key={cls.id} className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-900">{cls.name}</span>
+                          <span className="text-[10px] text-slate-400 font-medium">Form Teacher</span>
+                        </div>
+                        <select
+                          value={cls.classTeacherName || ''}
+                          onChange={e => handleUpdateClassTeacherDirect(cls.id, e.target.value)}
+                          className="w-full text-xs font-semibold border border-slate-300 rounded p-1.5 focus:ring-1 focus:ring-blue-500 bg-white"
+                        >
+                          <option value="">-- Select Teacher --</option>
+                          {availableTeachers.map(t => (
+                            <option key={t.id} value={t.name}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Term-Specific Switcher & Configuration Box */}

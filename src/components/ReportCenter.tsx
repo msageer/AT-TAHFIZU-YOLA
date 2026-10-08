@@ -526,6 +526,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
               gradingBoundaries={db.gradingBoundaries}
               psychomotorItems={db.psychomotorItems}
               classes={db.classes}
+              users={db.users}
             />
           </div>
         ))}
@@ -575,6 +576,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                     gradingBoundaries={db.gradingBoundaries}
                     psychomotorItems={db.psychomotorItems}
                     classes={db.classes}
+                    users={db.users}
                   />
                 </div>
               ))}

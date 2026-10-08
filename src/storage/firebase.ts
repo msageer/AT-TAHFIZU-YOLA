@@ -55,11 +55,74 @@ export interface FirestoreErrorInfo {
   };
 }
 
+const QUOTA_STORAGE_KEY = 'islamic_school_firestore_quota_exhausted_v1';
+
+/**
+ * Checks whether an error is a Firestore resource-exhausted (quota limit) error.
+ */
+export function isQuotaExceededError(error: unknown): boolean {
+  if (!error) return false;
+  const msg = error instanceof Error ? error.message : String(error);
+  const code = (error as any)?.code;
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Free daily write units')
+  );
+}
+
+/**
+ * Returns true if Firestore daily write quota was previously marked as exhausted today.
+ */
+export function isQuotaExhausted(): boolean {
+  try {
+    const raw =
+      typeof sessionStorage !== 'undefined'
+        ? sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY)
+        : null;
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    // If recorded within the last 8 hours, treat as exhausted
+    if (Date.now() - data.timestamp < 8 * 60 * 60 * 1000) {
+      return true;
+    }
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Marks Firestore quota as exhausted to prevent further write attempts until reset.
+ */
+export function markQuotaExhausted(): void {
+  try {
+    const payload = JSON.stringify({ timestamp: Date.now(), reason: 'resource-exhausted' });
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(QUOTA_STORAGE_KEY, payload);
+      localStorage.setItem(QUOTA_STORAGE_KEY, payload);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
 ): void {
+  if (isQuotaExceededError(error)) {
+    markQuotaExhausted();
+    console.warn('Firestore daily write quota reached (Free tier). App safely active in local offline storage.');
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -82,11 +145,18 @@ export function handleFirestoreError(
 
 // 3. Mandatory Connection Test
 export async function testConnection(): Promise<boolean> {
+  if (isQuotaExhausted()) {
+    return false;
+  }
   const testPath = 'test/connection';
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (error) {
+    if (isQuotaExceededError(error)) {
+      markQuotaExhausted();
+      return false;
+    }
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('Firestore client is offline; using offline cache.');
     } else {
@@ -96,8 +166,10 @@ export async function testConnection(): Promise<boolean> {
   }
 }
 
-// Run connection test on initialization
-testConnection().catch(() => {});
+// Run connection test on initialization if quota not exhausted
+if (!isQuotaExhausted()) {
+  testConnection().catch(() => {});
+}
 
 const SCHOOL_DOC_ID = 'school-main';
 
@@ -133,11 +205,40 @@ export function sanitizeForFirestore<T>(val: T): T {
   return cleanObj as T;
 }
 
+let isSyncInProgress = false;
+let lastSyncedChecksum: string = '';
+
+function computeDatabaseChecksum(appDb: AppDatabase): string {
+  const s = appDb.settings;
+  const setHash = `${s.schoolName}-${s.currentSession}-${s.currentTerm}-${s.schoolCloses}-${s.nextTermBegins}-${s.defaultNextTermFees}`;
+  const counts = `${appDb.students?.length || 0}-${appDb.assessments?.length || 0}-${appDb.attendance?.length || 0}-${appDb.users?.length || 0}-${appDb.classes?.length || 0}`;
+  const lastStu = appDb.students?.[appDb.students.length - 1]?.id || '';
+  const lastAsm = appDb.assessments?.[appDb.assessments.length - 1]?.id || '';
+  return `${setHash}|${counts}|${lastStu}|${lastAsm}`;
+}
+
 /**
  * Sync entire AppDatabase to Firestore in a transactional/batch-safe manner.
  * Updates and overrides data across devices without tampering with existing records.
  */
 export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void> {
+  // If Firestore quota is already exhausted, safely skip cloud writes to avoid backend error loops
+  if (isQuotaExhausted()) {
+    return;
+  }
+
+  // Prevent concurrent conflicting syncs
+  if (isSyncInProgress) {
+    return;
+  }
+
+  // Skip redundant writes if database state hasn't changed since last successful sync
+  const currentChecksum = computeDatabaseChecksum(appDb);
+  if (currentChecksum === lastSyncedChecksum) {
+    return;
+  }
+
+  isSyncInProgress = true;
   try {
     const schoolRef = doc(db, 'schools', SCHOOL_DOC_ID);
 
@@ -170,34 +271,6 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
         });
         await batch.commit();
       }
-    }
-
-    // 2b. Clean up deleted students from cloud Firestore
-    try {
-      const existingFirestoreStudentDocs = await getDocs(
-        collection(db, 'schools', SCHOOL_DOC_ID, 'students')
-      );
-      const currentStudentIds = new Set((appDb.students || []).map(s => toSafeDocId(s.id)));
-      const currentStudentCodes = new Set((appDb.students || []).map(s => toSafeDocId(s.studentId)));
-      const deleteBatch = writeBatch(db);
-      let delCount = 0;
-      existingFirestoreStudentDocs.forEach(d => {
-        const data = d.data();
-        const matches =
-          currentStudentIds.has(d.id) ||
-          currentStudentCodes.has(d.id) ||
-          currentStudentIds.has(toSafeDocId(data.id)) ||
-          currentStudentCodes.has(toSafeDocId(data.studentId));
-        if (!matches) {
-          deleteBatch.delete(d.ref);
-          delCount++;
-        }
-      });
-      if (delCount > 0) {
-        await deleteBatch.commit();
-      }
-    } catch {
-      // Non-fatal cleanup
     }
 
     // 3. Save Assessments in Batches
@@ -242,9 +315,9 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       await batch.commit();
     }
 
-    // 6. Save Audit Logs (most recent 100)
+    // 6. Save Audit Logs (most recent 50)
     if (appDb.auditLogs && appDb.auditLogs.length > 0) {
-      const recentLogs = appDb.auditLogs.slice(0, 100);
+      const recentLogs = appDb.auditLogs.slice(0, 50);
       const batch = writeBatch(db);
       recentLogs.forEach(log => {
         const docRef = doc(db, 'schools', SCHOOL_DOC_ID, 'auditLogs', toSafeDocId(log.id));
@@ -252,9 +325,18 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       });
       await batch.commit();
     }
+
+    lastSyncedChecksum = currentChecksum;
   } catch (error) {
+    if (isQuotaExceededError(error)) {
+      markQuotaExhausted();
+      console.warn('Firestore daily write quota reached during sync; safely maintaining offline database.');
+      return;
+    }
     handleFirestoreError(error, OperationType.WRITE, `schools/${SCHOOL_DOC_ID}`);
     throw error;
+  } finally {
+    isSyncInProgress = false;
   }
 }
 
@@ -265,6 +347,9 @@ export async function deleteStudentFromFirestore(
   studentInternalId: string,
   studentId?: string
 ): Promise<void> {
+  if (isQuotaExhausted()) {
+    return;
+  }
   try {
     // 1. Direct delete by internal ID
     if (studentInternalId) {
@@ -277,66 +362,11 @@ export async function deleteStudentFromFirestore(
       const altStudentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', toSafeDocId(studentId));
       await deleteDoc(altStudentRef).catch(() => {});
     }
-
-    // 3. Query all docs in students subcollection to catch any document matching ID or studentId
-    const stuCol = collection(db, 'schools', SCHOOL_DOC_ID, 'students');
-    const stuSnaps = await getDocs(stuCol);
-    const stuBatch = writeBatch(db);
-    let stuCount = 0;
-    const safeInternal = toSafeDocId(studentInternalId);
-    const safeStudentId = studentId ? toSafeDocId(studentId) : '';
-    stuSnaps.forEach(d => {
-      const data = d.data();
-      if (
-        d.id === studentInternalId ||
-        d.id === safeInternal ||
-        (studentId && (d.id === studentId || d.id === safeStudentId)) ||
-        data.id === studentInternalId ||
-        (studentId && (data.studentId === studentId || data.studentId === studentInternalId))
-      ) {
-        stuBatch.delete(d.ref);
-        stuCount++;
-      }
-    });
-    if (stuCount > 0) {
-      await stuBatch.commit();
-    }
-
-    // 4. Clean up any assessments belonging to this student in Firestore
-    const sid = studentId || studentInternalId;
-    if (sid) {
-      const asmCol = collection(db, 'schools', SCHOOL_DOC_ID, 'assessments');
-      const asmSnaps = await getDocs(asmCol);
-      const batch = writeBatch(db);
-      let count = 0;
-      asmSnaps.forEach(d => {
-        const data = d.data();
-        if (data.studentId === sid || data.studentId === studentInternalId) {
-          batch.delete(d.ref);
-          count++;
-        }
-      });
-      if (count > 0) {
-        await batch.commit();
-      }
-
-      // 5. Clean up any attendance belonging to this student in Firestore
-      const attCol = collection(db, 'schools', SCHOOL_DOC_ID, 'attendance');
-      const attSnaps = await getDocs(attCol);
-      const attBatch = writeBatch(db);
-      let attCount = 0;
-      attSnaps.forEach(d => {
-        const data = d.data();
-        if (data.studentId === sid || data.studentId === studentInternalId) {
-          attBatch.delete(d.ref);
-          attCount++;
-        }
-      });
-      if (attCount > 0) {
-        await attBatch.commit();
-      }
-    }
   } catch (error) {
+    if (isQuotaExceededError(error)) {
+      markQuotaExhausted();
+      return;
+    }
     handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/students/${studentInternalId}`);
   }
 }
@@ -345,10 +375,15 @@ export async function deleteStudentFromFirestore(
  * Permanently removes an assessment from Firestore.
  */
 export async function deleteAssessmentFromFirestore(assessmentId: string): Promise<void> {
+  if (isQuotaExhausted()) return;
   try {
     const asmRef = doc(db, 'schools', SCHOOL_DOC_ID, 'assessments', toSafeDocId(assessmentId));
     await deleteDoc(asmRef);
   } catch (error) {
+    if (isQuotaExceededError(error)) {
+      markQuotaExhausted();
+      return;
+    }
     handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/assessments/${assessmentId}`);
   }
 }
@@ -357,10 +392,15 @@ export async function deleteAssessmentFromFirestore(assessmentId: string): Promi
  * Permanently removes a user account from Firestore.
  */
 export async function deleteUserFromFirestore(userId: string): Promise<void> {
+  if (isQuotaExhausted()) return;
   try {
     const userRef = doc(db, 'schools', SCHOOL_DOC_ID, 'users', toSafeDocId(userId));
     await deleteDoc(userRef);
   } catch (error) {
+    if (isQuotaExceededError(error)) {
+      markQuotaExhausted();
+      return;
+    }
     handleFirestoreError(error, OperationType.DELETE, `schools/${SCHOOL_DOC_ID}/users/${userId}`);
   }
 }
@@ -381,6 +421,12 @@ export function setupRealtimeSync(
   onSyncUpdate: (updatedDb: AppDatabase) => void,
   onStatusChange?: (status: 'synced' | 'syncing' | 'offline' | 'error') => void
 ): () => void {
+  // If quota is exhausted, immediately transition to offline mode without opening backend listeners
+  if (isQuotaExhausted()) {
+    onStatusChange?.('offline');
+    return () => {};
+  }
+
   let isSeeding = false;
   const unsubs: Unsubscribe[] = [];
 
@@ -400,15 +446,15 @@ export function setupRealtimeSync(
     async snapshot => {
       onStatusChange?.('syncing');
       if (!snapshot.exists()) {
-        // First-time setup: Seed Firestore with initial database
-        if (!isSeeding) {
+        // First-time setup: Seed Firestore once with initial database if quota allows
+        if (!isSeeding && !isQuotaExhausted()) {
           isSeeding = true;
           try {
             await syncDatabaseToFirestore(initialLocalDb);
             onStatusChange?.('synced');
           } catch (err) {
-            console.error('Initial Firestore seeding failed:', err);
-            onStatusChange?.('error');
+            console.warn('Initial Firestore seeding skipped or failed:', err);
+            onStatusChange?.('offline');
           } finally {
             isSeeding = false;
           }
@@ -436,6 +482,11 @@ export function setupRealtimeSync(
       }
     },
     error => {
+      if (isQuotaExceededError(error)) {
+        markQuotaExhausted();
+        onStatusChange?.('offline');
+        return;
+      }
       handleFirestoreError(error, OperationType.GET, `schools/${SCHOOL_DOC_ID}`);
       onStatusChange?.('offline');
     }
@@ -448,9 +499,8 @@ export function setupRealtimeSync(
     studentsColRef,
     snapshot => {
       if (!activeSyncAccumulator) return;
-      if (snapshot.empty && activeSyncAccumulator.students && activeSyncAccumulator.students.length > 0) {
-        // Cloud is empty on first listen but client has local students: seed cloud
-        syncDatabaseToFirestore(activeSyncAccumulator).catch(() => {});
+      if (snapshot.empty) {
+        // If cloud snapshot is empty, preserve local student data without issuing writes
         return;
       }
       const cloudStudents: Student[] = [];
@@ -464,6 +514,11 @@ export function setupRealtimeSync(
       notifyChange();
     },
     error => {
+      if (isQuotaExceededError(error)) {
+        markQuotaExhausted();
+        onStatusChange?.('offline');
+        return;
+      }
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/students`);
     }
   );
@@ -475,9 +530,8 @@ export function setupRealtimeSync(
     assessmentsColRef,
     snapshot => {
       if (!activeSyncAccumulator) return;
-      if (snapshot.empty && activeSyncAccumulator.assessments && activeSyncAccumulator.assessments.length > 0) {
-        // Cloud is empty on first listen but client has local assessments: seed cloud
-        syncDatabaseToFirestore(activeSyncAccumulator).catch(() => {});
+      if (snapshot.empty) {
+        // Preserve local assessments without issuing writes
         return;
       }
       const cloudAssessments: AssessmentRecord[] = [];
@@ -491,6 +545,11 @@ export function setupRealtimeSync(
       notifyChange();
     },
     error => {
+      if (isQuotaExceededError(error)) {
+        markQuotaExhausted();
+        onStatusChange?.('offline');
+        return;
+      }
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/assessments`);
     }
   );
@@ -502,8 +561,8 @@ export function setupRealtimeSync(
     attendanceColRef,
     snapshot => {
       if (!activeSyncAccumulator) return;
-      if (snapshot.empty && activeSyncAccumulator.attendance && activeSyncAccumulator.attendance.length > 0) {
-        syncDatabaseToFirestore(activeSyncAccumulator).catch(() => {});
+      if (snapshot.empty) {
+        // Preserve local attendance without issuing writes
         return;
       }
       const cloudAttendance: AttendanceRecord[] = [];
@@ -517,6 +576,11 @@ export function setupRealtimeSync(
       notifyChange();
     },
     error => {
+      if (isQuotaExceededError(error)) {
+        markQuotaExhausted();
+        onStatusChange?.('offline');
+        return;
+      }
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/attendance`);
     }
   );
@@ -541,6 +605,11 @@ export function setupRealtimeSync(
       }
     },
     error => {
+      if (isQuotaExceededError(error)) {
+        markQuotaExhausted();
+        onStatusChange?.('offline');
+        return;
+      }
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/users`);
     }
   );
@@ -566,6 +635,11 @@ export function setupRealtimeSync(
       }
     },
     error => {
+      if (isQuotaExceededError(error)) {
+        markQuotaExhausted();
+        onStatusChange?.('offline');
+        return;
+      }
       handleFirestoreError(error, OperationType.LIST, `schools/${SCHOOL_DOC_ID}/auditLogs`);
     }
   );
