@@ -123,12 +123,47 @@ export function getEmptyDatabase(): AppDatabase {
         'Primary One': '₦ 16,000',
         'Primary Two': '₦ 16,000',
       },
+      termSettings: {
+        '1st Term': {
+          schoolCloses: '18th December 2025',
+          nextTermBegins: '12th January 2026',
+          defaultFees: '₦ 18,000',
+          classFees: {
+            'Nursery One': '₦ 15,000',
+            'Nursery Two': '₦ 15,000',
+            'Primary One': '₦ 18,000',
+            'Primary Two': '₦ 18,000',
+          },
+        },
+        '2nd Term': {
+          schoolCloses: '10th April 2026',
+          nextTermBegins: '04th May 2026',
+          defaultFees: '₦ 15,000',
+          classFees: {
+            'Nursery One': '₦ 12,000',
+            'Nursery Two': '₦ 12,000',
+            'Primary One': '₦ 15,000',
+            'Primary Two': '₦ 15,000',
+          },
+        },
+        '3rd Term': {
+          schoolCloses: '24th Dhul Hijjah 1447 / 10th June 2026',
+          nextTermBegins: '04th Muharram 1448 / 20th July 2026',
+          defaultFees: '₦ 16,000',
+          classFees: {
+            'Nursery One': '₦ 13,000',
+            'Nursery Two': '₦ 13,000',
+            'Primary One': '₦ 16,000',
+            'Primary Two': '₦ 16,000',
+          },
+        },
+      },
     },
     classes: [
-      { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaza Khadija Bello' },
-      { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaz Ibrahim Aliyu' },
-      { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaza Aisha Muhammad Ardo' },
-      { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaz Usman Bello' },
+      { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaza Khadija Bello', termFees: { '1st Term': '₦ 15,000', '2nd Term': '₦ 12,000', '3rd Term': '₦ 13,000' } },
+      { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaz Ibrahim Aliyu', termFees: { '1st Term': '₦ 15,000', '2nd Term': '₦ 12,000', '3rd Term': '₦ 13,000' } },
+      { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaza Aisha Muhammad Ardo', termFees: { '1st Term': '₦ 18,000', '2nd Term': '₦ 15,000', '3rd Term': '₦ 16,000' } },
+      { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaz Usman Bello', termFees: { '1st Term': '₦ 18,000', '2nd Term': '₦ 15,000', '3rd Term': '₦ 16,000' } },
     ],
     sections: [
       { id: 'sec-1', name: 'A', schoolId: 'school-main' },
@@ -201,6 +236,10 @@ export function loadDatabase(): AppDatabase {
     parsed.settings = {
       ...defaultSettings,
       ...(parsed.settings || {}),
+      termSettings: {
+        ...(defaultSettings.termSettings || {}),
+        ...(parsed.settings?.termSettings || {}),
+      },
       isSetupComplete: true, // Keep marked complete
     };
 
@@ -288,6 +327,11 @@ export function loadDatabase(): AppDatabase {
       };
     } else {
       cleanedUsers.unshift(DEFAULT_SUPER_ADMIN);
+    }
+
+    const hasTeacher = cleanedUsers.some(u => u.role === 'teacher');
+    if (!hasTeacher) {
+      cleanedUsers.push(DEFAULT_TEACHER_ACCOUNT);
     }
 
     parsed.users = cleanedUsers;

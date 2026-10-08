@@ -42,6 +42,13 @@ export interface AuditLogEntry {
   timestamp: string;
 }
 
+export interface TermConfig {
+  schoolCloses?: string; // School Vacation / Closing Date for this term
+  nextTermBegins?: string; // School Resumption / Opening Date for next term
+  defaultFees?: string; // Fallback fee for this term e.g. "₦ 16,000"
+  classFees?: Record<string, string>; // Per-class fees mapping for this term e.g. { "Nursery One": "₦ 14,000" }
+}
+
 export interface SchoolSettings {
   schoolId: string;
   schoolName: string;
@@ -66,6 +73,8 @@ export interface SchoolSettings {
   nextTermBegins?: string; // School Resumption / Opening Date
   defaultNextTermFees?: string; // Global fallback fees e.g. "₦ 16,000"
   classFees?: Record<string, string>; // Per-class fees mapping e.g. { "Nursery One": "₦ 12,000" }
+  // Term-specific configurations (1st Term, 2nd Term, 3rd Term)
+  termSettings?: Record<string, TermConfig>;
 }
 
 export interface ClassItem {
@@ -75,6 +84,7 @@ export interface ClassItem {
   order: number;
   sections?: string[]; // Specific sections/arms for this class: [] (Default / No Section), or ['A', 'B'] (Arms A & B)
   nextTermFees?: string; // Specific next term fees for this class e.g. "₦ 14,000"
+  termFees?: Record<string, string>; // Per-term specific fees e.g. { "1st Term": "₦ 18,000", "2nd Term": "₦ 15,000", "3rd Term": "₦ 16,000" }
   classTeacherName?: string; // Assigned class / form teacher name
 }
 
@@ -92,6 +102,9 @@ export interface SubjectItem {
   code?: string;
   isActive: boolean;
   applicableClasses?: string[]; // Empty or ['ALL'] means all classes
+  teacherName?: string; // Assigned lead/default teacher name (selected from added teachers)
+  teacherId?: string; // User ID of assigned teacher
+  classTeachers?: Record<string, string>; // Per-class teacher mapping: { [className]: teacherName }
 }
 
 export interface GradeBoundary {

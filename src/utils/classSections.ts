@@ -94,7 +94,8 @@ export function cascadeRenameClass(
   newSections?: string[],
   newOrder?: number,
   newFees?: string,
-  newTeacher?: string
+  newTeacher?: string,
+  newTermFees?: Record<string, string>
 ): AppDatabase {
   const oldTrimmed = oldClassName.trim();
   const newTrimmed = newClassName.trim();
@@ -109,6 +110,7 @@ export function cascadeRenameClass(
         ...(newOrder !== undefined ? { order: newOrder } : {}),
         ...(newFees !== undefined ? { nextTermFees: newFees } : {}),
         ...(newTeacher !== undefined ? { classTeacherName: newTeacher } : {}),
+        ...(newTermFees !== undefined ? { termFees: newTermFees } : {}),
       };
     }
     return c;
@@ -182,20 +184,28 @@ export function cascadeRenameClass(
     return att;
   });
 
-  // 5. Cascade to subjects applicableClasses
+  // 5. Cascade to subjects applicableClasses and classTeachers
   const updatedSubjects = (db.subjects || []).map(sub => {
-    if (!sub.applicableClasses || sub.applicableClasses.length === 0 || sub.applicableClasses.includes('ALL')) {
-      return sub;
+    let updatedApplicable = sub.applicableClasses;
+    if (sub.applicableClasses && sub.applicableClasses.length > 0 && !sub.applicableClasses.includes('ALL')) {
+      updatedApplicable = sub.applicableClasses.map(ac => {
+        if (ac.toLowerCase().trim() === oldTrimmed.toLowerCase()) {
+          return newTrimmed;
+        }
+        return ac;
+      });
     }
-    const updatedApplicable = sub.applicableClasses.map(ac => {
-      if (ac.toLowerCase().trim() === oldTrimmed.toLowerCase()) {
-        return newTrimmed;
-      }
-      return ac;
-    });
+
+    const updatedClassTeachers = sub.classTeachers ? { ...sub.classTeachers } : undefined;
+    if (updatedClassTeachers && updatedClassTeachers[oldTrimmed]) {
+      updatedClassTeachers[newTrimmed] = updatedClassTeachers[oldTrimmed];
+      delete updatedClassTeachers[oldTrimmed];
+    }
+
     return {
       ...sub,
       applicableClasses: updatedApplicable,
+      ...(updatedClassTeachers ? { classTeachers: updatedClassTeachers } : {}),
     };
   });
 
@@ -210,8 +220,33 @@ export function cascadeRenameClass(
     return u;
   });
 
+  // 7. Cascade to school settings termSettings and classFees
+  const updatedSettings = { ...db.settings };
+  if (updatedSettings.classFees && updatedSettings.classFees[oldTrimmed]) {
+    updatedSettings.classFees = {
+      ...updatedSettings.classFees,
+      [newTrimmed]: updatedSettings.classFees[oldTrimmed],
+    };
+    delete updatedSettings.classFees[oldTrimmed];
+  }
+  if (updatedSettings.termSettings) {
+    const updatedTermSettings: Record<string, any> = { ...updatedSettings.termSettings };
+    Object.keys(updatedTermSettings).forEach(t => {
+      const tc = updatedTermSettings[t];
+      if (tc && tc.classFees && tc.classFees[oldTrimmed]) {
+        tc.classFees = {
+          ...tc.classFees,
+          [newTrimmed]: tc.classFees[oldTrimmed],
+        };
+        delete tc.classFees[oldTrimmed];
+      }
+    });
+    updatedSettings.termSettings = updatedTermSettings;
+  }
+
   return {
     ...db,
+    settings: updatedSettings,
     classes: updatedClasses,
     students: updatedStudents,
     assessments: updatedAssessments,

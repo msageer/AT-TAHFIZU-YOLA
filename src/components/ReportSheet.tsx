@@ -31,19 +31,28 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
     c => c.name.toLowerCase().trim() === (targetClassName || '').toLowerCase().trim()
   );
 
+  // Term-specific calendar and school fees resolution
+  const studentTerm = assessment.term || settings.currentTerm || '1st Term';
+  const termCfg = settings.termSettings?.[studentTerm];
+
   const resolvedFees =
+    matchedClass?.termFees?.[studentTerm] ||
+    termCfg?.classFees?.[targetClassName] ||
     matchedClass?.nextTermFees ||
+    termCfg?.defaultFees ||
     settings.classFees?.[targetClassName] ||
     assessment.nextTermFees ||
     settings.defaultNextTermFees ||
     '₦ 16,000';
 
   const resolvedSchoolCloses =
+    termCfg?.schoolCloses ||
     settings.schoolCloses ||
     assessment.schoolCloses ||
     '24th Dhul Hijjah 1447 / 10th June 2026';
 
   const resolvedNextTermBegins =
+    termCfg?.nextTermBegins ||
     settings.nextTermBegins ||
     assessment.nextTermBegins ||
     '04th Muharram 1448 / 20th July 2026';

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   SchoolSettings,
   ClassItem,
@@ -92,6 +92,148 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     ...db.psychomotorItems,
   ]);
 
+  // Term-specific calendar & fees active tab (1st Term, 2nd Term, 3rd Term)
+  const [selectedTermSettingsTab, setSelectedTermSettingsTab] = useState<'1st Term' | '2nd Term' | '3rd Term'>(
+    (db.settings.currentTerm as any) || '1st Term'
+  );
+
+  // Available teachers (from db.users with role teacher or staff, plus any assigned form teachers)
+  const availableTeachers = useMemo(() => {
+    const list: Array<{ id: string; name: string; role: string; email?: string }> = [];
+    const namesSeen = new Set<string>();
+
+    (db.users || []).forEach(u => {
+      if (u.fullName && !namesSeen.has(u.fullName.toLowerCase().trim())) {
+        namesSeen.add(u.fullName.toLowerCase().trim());
+        list.push({ id: u.id, name: u.fullName.trim(), role: u.role, email: u.email });
+      }
+    });
+
+    (db.classes || []).forEach(c => {
+      if (c.classTeacherName && !namesSeen.has(c.classTeacherName.toLowerCase().trim())) {
+        namesSeen.add(c.classTeacherName.toLowerCase().trim());
+        list.push({ id: `cls-teacher-${c.id}`, name: c.classTeacherName.trim(), role: 'teacher' });
+      }
+    });
+
+    return list;
+  }, [db.users, db.classes]);
+
+  // Current term configuration for selectedTermSettingsTab
+  const currentTermCfg = schoolSettings.termSettings?.[selectedTermSettingsTab] || {
+    schoolCloses: schoolSettings.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026',
+    nextTermBegins: schoolSettings.nextTermBegins || '04th Muharram 1448 / 20th July 2026',
+    defaultFees: schoolSettings.defaultNextTermFees || '₦ 16,000',
+    classFees: { ...(schoolSettings.classFees || {}) },
+  };
+
+  const handleUpdateTermField = (field: 'schoolCloses' | 'nextTermBegins' | 'defaultFees', value: string) => {
+    const updatedTermCfg = {
+      ...currentTermCfg,
+      [field]: value,
+    };
+    const updatedTermSettings = {
+      ...(schoolSettings.termSettings || {}),
+      [selectedTermSettingsTab]: updatedTermCfg,
+    };
+    setSchoolSettings(prev => ({
+      ...prev,
+      termSettings: updatedTermSettings,
+      ...(selectedTermSettingsTab === prev.currentTerm ? { [field === 'defaultFees' ? 'defaultNextTermFees' : field]: value } : {}),
+    }));
+  };
+
+  const handleUpdateTermClassFee = (className: string, feeValue: string) => {
+    const updatedClassFees = {
+      ...(currentTermCfg.classFees || {}),
+      [className]: feeValue,
+    };
+    const updatedTermCfg = {
+      ...currentTermCfg,
+      classFees: updatedClassFees,
+    };
+    const updatedTermSettings = {
+      ...(schoolSettings.termSettings || {}),
+      [selectedTermSettingsTab]: updatedTermCfg,
+    };
+
+    const updatedClasses = classes.map(c => {
+      if (c.name.toLowerCase().trim() === className.toLowerCase().trim()) {
+        return {
+          ...c,
+          termFees: {
+            ...(c.termFees || {}),
+            [selectedTermSettingsTab]: feeValue,
+          },
+          ...(selectedTermSettingsTab === schoolSettings.currentTerm ? { nextTermFees: feeValue } : {}),
+        };
+      }
+      return c;
+    });
+
+    setClasses(updatedClasses);
+    setSchoolSettings(prev => ({
+      ...prev,
+      termSettings: updatedTermSettings,
+      ...(selectedTermSettingsTab === prev.currentTerm ? {
+        classFees: {
+          ...(prev.classFees || {}),
+          [className]: feeValue,
+        },
+      } : {}),
+    }));
+  };
+
+  const handleCopyTermSettingsToAllTerms = () => {
+    const updatedTermSettings: Record<string, any> = { ...(schoolSettings.termSettings || {}) };
+    ['1st Term', '2nd Term', '3rd Term'].forEach(t => {
+      updatedTermSettings[t] = {
+        schoolCloses: currentTermCfg.schoolCloses,
+        nextTermBegins: currentTermCfg.nextTermBegins,
+        defaultFees: currentTermCfg.defaultFees,
+        classFees: { ...(currentTermCfg.classFees || {}) },
+      };
+    });
+    setSchoolSettings(prev => ({
+      ...prev,
+      termSettings: updatedTermSettings,
+    }));
+    showNotification(`Dates & Class fees from ${selectedTermSettingsTab} copied to all terms!`);
+  };
+
+  const handleApplyDefaultFeeToAllClasses = () => {
+    const feeToApply = currentTermCfg.defaultFees || '₦ 16,000';
+    const updatedClassFees: Record<string, string> = {};
+    classes.forEach(c => {
+      updatedClassFees[c.name] = feeToApply;
+    });
+    const updatedTermCfg = {
+      ...currentTermCfg,
+      classFees: updatedClassFees,
+    };
+    const updatedTermSettings = {
+      ...(schoolSettings.termSettings || {}),
+      [selectedTermSettingsTab]: updatedTermCfg,
+    };
+
+    const updatedClasses = classes.map(c => ({
+      ...c,
+      termFees: {
+        ...(c.termFees || {}),
+        [selectedTermSettingsTab]: feeToApply,
+      },
+      ...(selectedTermSettingsTab === schoolSettings.currentTerm ? { nextTermFees: feeToApply } : {}),
+    }));
+
+    setClasses(updatedClasses);
+    setSchoolSettings(prev => ({
+      ...prev,
+      termSettings: updatedTermSettings,
+      ...(selectedTermSettingsTab === prev.currentTerm ? { classFees: updatedClassFees } : {}),
+    }));
+    showNotification(`Applied ${feeToApply} to all classes in ${selectedTermSettingsTab}`);
+  };
+
   // Notifications
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(
     null
@@ -184,6 +326,11 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   const [editClassSections, setEditClassSections] = useState<string[]>([]);
   const [editClassFees, setEditClassFees] = useState('₦ 16,000');
   const [editClassTeacher, setEditClassTeacher] = useState('');
+  const [editClassTermFees, setEditClassTermFees] = useState<Record<string, string>>({
+    '1st Term': '₦ 16,000',
+    '2nd Term': '₦ 16,000',
+    '3rd Term': '₦ 16,000',
+  });
   const [newArmName, setNewArmName] = useState('');
 
   const handleStartEditClass = (cls: ClassItem) => {
@@ -196,6 +343,11 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     setEditClassSections(configuredSections);
     setEditClassFees(cls.nextTermFees || schoolSettings.classFees?.[cls.name] || schoolSettings.defaultNextTermFees || '₦ 16,000');
     setEditClassTeacher(cls.classTeacherName || '');
+    setEditClassTermFees({
+      '1st Term': cls.termFees?.['1st Term'] || schoolSettings.termSettings?.['1st Term']?.classFees?.[cls.name] || cls.nextTermFees || '₦ 16,000',
+      '2nd Term': cls.termFees?.['2nd Term'] || schoolSettings.termSettings?.['2nd Term']?.classFees?.[cls.name] || cls.nextTermFees || '₦ 16,000',
+      '3rd Term': cls.termFees?.['3rd Term'] || schoolSettings.termSettings?.['3rd Term']?.classFees?.[cls.name] || cls.nextTermFees || '₦ 16,000',
+    });
     setNewArmName('');
   };
 
@@ -240,19 +392,36 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
         finalSections,
         editClassOrder,
         editClassFees.trim() || '₦ 16,000',
-        editClassTeacher.trim()
+        editClassTeacher.trim(),
+        editClassTermFees
       );
-      // Synchronize class fees into settings.classFees map
-      const updatedClassFees = {
+      // Synchronize class fees into settings.classFees and settings.termSettings
+      const updatedClassFees: Record<string, string> = {
         ...(updatedDb.settings.classFees || {}),
         [newName]: editClassFees.trim() || '₦ 16,000',
       };
       if (oldName !== newName && updatedClassFees[oldName]) {
         delete updatedClassFees[oldName];
       }
+
+      const updatedTermSettings: Record<string, any> = { ...(updatedDb.settings.termSettings || {}) };
+      ['1st Term', '2nd Term', '3rd Term'].forEach(t => {
+        const tc = { ...(updatedTermSettings[t] || {}) };
+        const tcClassFees = { ...(tc.classFees || {}) };
+        if (editClassTermFees[t]) {
+          tcClassFees[newName] = editClassTermFees[t];
+        }
+        if (oldName !== newName && tcClassFees[oldName]) {
+          delete tcClassFees[oldName];
+        }
+        tc.classFees = tcClassFees;
+        updatedTermSettings[t] = tc;
+      });
+
       updatedDb.settings = {
         ...updatedDb.settings,
         classFees: updatedClassFees,
+        termSettings: updatedTermSettings,
       };
 
       setSchoolSettings(updatedDb.settings);
@@ -291,12 +460,19 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
         ? newClassSections
         : [];
 
+    const newClassFee = newClassFees.trim() || schoolSettings.defaultNextTermFees || '₦ 16,000';
     const newClass: ClassItem = {
       id: `cls-${Date.now()}`,
       name: newClassName.trim(),
       order: classes.length + 1,
       sections: finalSections,
-      nextTermFees: newClassFees.trim() || schoolSettings.defaultNextTermFees || '₦ 16,000',
+      nextTermFees: newClassFee,
+      termFees: {
+        '1st Term': schoolSettings.termSettings?.['1st Term']?.defaultFees || newClassFee,
+        '2nd Term': schoolSettings.termSettings?.['2nd Term']?.defaultFees || newClassFee,
+        '3rd Term': schoolSettings.termSettings?.['3rd Term']?.defaultFees || newClassFee,
+        [schoolSettings.currentTerm || '1st Term']: newClassFee,
+      },
       classTeacherName: newClassTeacher.trim(),
     };
     const updated = [...classes, newClass];
@@ -308,14 +484,26 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
 
     const updatedClassFees: Record<string, string> = {
       ...(schoolSettings.classFees || {}),
-      [newClass.name]: newClass.nextTermFees || '₦ 16,000',
+      [newClass.name]: newClassFee,
     };
+    const updatedTermSettings: Record<string, any> = { ...(schoolSettings.termSettings || {}) };
+    ['1st Term', '2nd Term', '3rd Term'].forEach(t => {
+      const existingTc = updatedTermSettings[t] || {};
+      updatedTermSettings[t] = {
+        ...existingTc,
+        classFees: {
+          ...(existingTc.classFees || {}),
+          [newClass.name]: newClass.termFees?.[t] || newClassFee,
+        },
+      };
+    });
     const updatedDb: AppDatabase = {
       ...db,
       classes: updated,
       settings: {
         ...schoolSettings,
         classFees: updatedClassFees,
+        termSettings: updatedTermSettings,
       },
     };
     setSchoolSettings(updatedDb.settings);
@@ -388,6 +576,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   // Subject management handlers
   const [newSubjectName, setNewSubjectName] = useState('');
   const [newSubjectArabic, setNewSubjectArabic] = useState('');
+  const [newSubjectTeacher, setNewSubjectTeacher] = useState('');
   const handleAddSubject = () => {
     if (!newSubjectName.trim()) return;
     const exists = subjects.some(s => s.name.toLowerCase() === newSubjectName.trim().toLowerCase());
@@ -400,11 +589,13 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
       name: newSubjectName.trim(),
       arabicName: newSubjectArabic.trim() || newSubjectName.trim(),
       isActive: true,
+      teacherName: newSubjectTeacher.trim() || undefined,
     };
     const updated = [...subjects, newSub];
     setSubjects(updated);
     setNewSubjectName('');
     setNewSubjectArabic('');
+    setNewSubjectTeacher('');
     onUpdateDb({ ...db, subjects: updated });
     showNotification(`Subject "${newSub.name}" added successfully!`);
   };
@@ -430,6 +621,42 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     const updated = subjects.map(s => (s.id === id ? { ...s, isActive: !s.isActive } : s));
     setSubjects(updated);
     onUpdateDb({ ...db, subjects: updated });
+  };
+
+  const handleSetSubjectTeacher = (subjectId: string, teacherName: string) => {
+    const updated = subjects.map(sub => {
+      if (sub.id !== subjectId) return sub;
+      return {
+        ...sub,
+        teacherName: teacherName || undefined,
+      };
+    });
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification(teacherName ? `Teacher "${teacherName}" assigned to subject.` : 'Teacher unassigned.');
+  };
+
+  const handleSetSubjectClassTeacher = (subjectId: string, className: string, teacherName: string) => {
+    const updated = subjects.map(sub => {
+      if (sub.id !== subjectId) return sub;
+      const currentMap = { ...(sub.classTeachers || {}) };
+      if (teacherName) {
+        currentMap[className] = teacherName;
+      } else {
+        delete currentMap[className];
+      }
+      return {
+        ...sub,
+        classTeachers: currentMap,
+      };
+    });
+    setSubjects(updated);
+    onUpdateDb({ ...db, subjects: updated });
+    showNotification(
+      teacherName
+        ? `Teacher "${teacherName}" assigned for ${className}.`
+        : `Teacher unassigned for ${className}.`
+    );
   };
 
   // Subject-to-Class Allocation handlers
@@ -861,89 +1088,182 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                 </div>
               </div>
 
-              {/* Report Sheet Information: Leadership, Calendar & Term Dates */}
-              <div className="pt-4 border-t border-slate-200 space-y-3">
+              {/* Report Sheet Information: Leadership & Term Calendar / School Fees */}
+              <div className="pt-4 border-t border-slate-200 space-y-4">
                 <div className="flex items-center space-x-2">
                   <Calendar className="w-4 h-4 text-emerald-600" />
                   <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
-                    Report Sheet Leadership &amp; Calendar Dates
+                    Report Sheet Leadership &amp; Term Calendar / School Fees
                   </h4>
                 </div>
                 <p className="text-[11px] text-slate-500">
-                  These settings automatically appear on every student&apos;s printed report card.
+                  Opening (resumption) dates, closing (vacation) dates, and school fees for each class can differ per term (1st Term, 2nd Term, 3rd Term). Report cards dynamically display the dates and fees matching that specific term.
                 </p>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                      Head Teacher / Principal Name
-                    </label>
-                    <input
-                      type="text"
-                      value={schoolSettings.headTeacherName || ''}
-                      onChange={e =>
-                        setSchoolSettings({ ...schoolSettings, headTeacherName: e.target.value })
-                      }
-                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      placeholder="e.g. Ustaz Al-Amin Kaigama"
-                    />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
-                      Printed on report card under HEAD TEACHER&apos;S NAME with signature line.
-                    </span>
+                {/* Head Teacher / Principal Name */}
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Head Teacher / Principal Name (Applies to all reports)
+                  </label>
+                  <input
+                    type="text"
+                    value={schoolSettings.headTeacherName || ''}
+                    onChange={e =>
+                      setSchoolSettings({ ...schoolSettings, headTeacherName: e.target.value })
+                    }
+                    className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                    placeholder="e.g. Ustaz Al-Amin Kaigama"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    Printed on report cards under HEAD TEACHER&apos;S NAME with signature line.
+                  </span>
+                </div>
+
+                {/* Term-Specific Switcher & Configuration Box */}
+                <div className="border border-blue-200 rounded-xl overflow-hidden shadow-xs bg-white">
+                  <div className="bg-blue-50/80 p-3 border-b border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <span className="text-xs font-bold text-blue-950 block">
+                        Term Dates &amp; Class Fees Configuration
+                      </span>
+                      <span className="text-[11px] text-blue-800">
+                        Opening &amp; closing dates, and each class&apos;s fees are saved separately for each term.
+                      </span>
+                    </div>
+
+                    {/* Term Selector Pills */}
+                    <div className="flex items-center bg-white p-0.5 rounded-lg border border-blue-200">
+                      {(['1st Term', '2nd Term', '3rd Term'] as const).map(t => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setSelectedTermSettingsTab(t)}
+                          className={`px-3 py-1 rounded text-xs font-bold transition flex items-center space-x-1 ${
+                            selectedTermSettingsTab === t
+                              ? 'bg-blue-900 text-white shadow-xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <span>{t}</span>
+                          {schoolSettings.currentTerm === t && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" title="Current Academic Term" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                      Default Next Term School Fees
-                    </label>
-                    <input
-                      type="text"
-                      value={schoolSettings.defaultNextTermFees || ''}
-                      onChange={e =>
-                        setSchoolSettings({ ...schoolSettings, defaultNextTermFees: e.target.value })
-                      }
-                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      placeholder="e.g. ₦ 16,000"
-                    />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
-                      Default fee for any class without a custom fee configured.
-                    </span>
-                  </div>
+                  <div className="p-4 space-y-4">
+                    {/* Term Dates Grid */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          School Vacation / Closing Date ({selectedTermSettingsTab})
+                        </label>
+                        <input
+                          type="text"
+                          value={currentTermCfg.schoolCloses || ''}
+                          onChange={e => handleUpdateTermField('schoolCloses', e.target.value)}
+                          className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          placeholder="e.g. 18th December 2025"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                          Printed under &apos;School closes&apos; on {selectedTermSettingsTab} reports.
+                        </span>
+                      </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                      School Vacation / Closing Date
-                    </label>
-                    <input
-                      type="text"
-                      value={schoolSettings.schoolCloses || ''}
-                      onChange={e =>
-                        setSchoolSettings({ ...schoolSettings, schoolCloses: e.target.value })
-                      }
-                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      placeholder="e.g. 24th Dhul Hijjah 1447 / 10th June 2026"
-                    />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
-                      Printed on report card under &apos;School closes&apos;.
-                    </span>
-                  </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          Next Term Resumption / Opening Date ({selectedTermSettingsTab})
+                        </label>
+                        <input
+                          type="text"
+                          value={currentTermCfg.nextTermBegins || ''}
+                          onChange={e => handleUpdateTermField('nextTermBegins', e.target.value)}
+                          className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          placeholder="e.g. 12th January 2026"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                          Printed under &apos;NEXT TERM BEGINS&apos; on {selectedTermSettingsTab} reports.
+                        </span>
+                      </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                      Next Term Resumption / Opening Date
-                    </label>
-                    <input
-                      type="text"
-                      value={schoolSettings.nextTermBegins || ''}
-                      onChange={e =>
-                        setSchoolSettings({ ...schoolSettings, nextTermBegins: e.target.value })
-                      }
-                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      placeholder="e.g. 04th Muharram 1448 / 20th July 2026"
-                    />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
-                      Printed on report card under &apos;NEXT TERM BEGINS&apos;.
-                    </span>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          Default Fees for {selectedTermSettingsTab}
+                        </label>
+                        <div className="flex items-center space-x-1.5">
+                          <input
+                            type="text"
+                            value={currentTermCfg.defaultFees || ''}
+                            onChange={e => handleUpdateTermField('defaultFees', e.target.value)}
+                            className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            placeholder="e.g. ₦ 16,000"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleApplyDefaultFeeToAllClasses}
+                            className="whitespace-nowrap px-2.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold border border-slate-300 transition"
+                            title={`Set all classes in ${selectedTermSettingsTab} to this fee`}
+                          >
+                            Set All
+                          </button>
+                        </div>
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                          Fallback fee for {selectedTermSettingsTab}.
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Per-Class Fees for selected term */}
+                    <div className="pt-2 border-t border-slate-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-xs font-bold text-slate-800 uppercase flex items-center space-x-1.5">
+                          <Coins className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Class Fees Breakdown for {selectedTermSettingsTab}:</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleCopyTermSettingsToAllTerms}
+                          className="text-[11px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-md border border-blue-200 transition"
+                          title="Copy these dates and per-class fees to 1st, 2nd, and 3rd Term"
+                        >
+                          Copy {selectedTermSettingsTab} to All Terms &rarr;
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
+                        {classes.map(c => {
+                          const feeForThisClass =
+                            currentTermCfg.classFees?.[c.name] ||
+                            c.termFees?.[selectedTermSettingsTab] ||
+                            c.nextTermFees ||
+                            currentTermCfg.defaultFees ||
+                            '₦ 16,000';
+
+                          return (
+                            <div
+                              key={c.id}
+                              className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 flex flex-col justify-between space-y-1.5"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-slate-900 text-xs">{c.name}</span>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  {c.sections?.length ? `Arms ${c.sections.join(',')}` : 'Default'}
+                                </span>
+                              </div>
+                              <input
+                                type="text"
+                                value={feeForThisClass}
+                                onChange={e => handleUpdateTermClassFee(c.name, e.target.value)}
+                                className="w-full text-xs font-bold border border-slate-300 rounded px-2 py-1 bg-white text-emerald-900 focus:ring-1 focus:ring-blue-500"
+                                placeholder="e.g. ₦ 16,000"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1028,15 +1348,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
-                  Form Teacher Name
+                  Form Teacher
                 </label>
-                <input
-                  type="text"
+                <select
                   value={newClassTeacher}
                   onChange={e => setNewClassTeacher(e.target.value)}
-                  placeholder="e.g. Ustaza Aisha Ardo"
                   className="w-full text-xs border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-blue-500 bg-white"
-                />
+                >
+                  <option value="">-- Select Added Teacher --</option>
+                  {availableTeachers.map(t => (
+                    <option key={t.id} value={t.name}>
+                      {t.name} ({t.role})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1126,15 +1451,28 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                       )}
                     </div>
 
-                    {/* School Fees */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center space-x-1">
-                        <Coins className="w-3 h-3 text-amber-600" />
-                        <span>Term Fees:</span>
-                      </span>
-                      <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
-                        {feeAmount}
-                      </span>
+                    {/* School Fees with Per-Term Breakdown */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center space-x-1">
+                          <Coins className="w-3 h-3 text-amber-600" />
+                          <span>Term Fees:</span>
+                        </span>
+                        <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
+                          {cls.termFees?.[schoolSettings.currentTerm] || feeAmount} <span className="text-[9px] font-normal text-slate-500">({schoolSettings.currentTerm})</span>
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 pt-0.5 text-[10px]">
+                        {(['1st Term', '2nd Term', '3rd Term'] as const).map(t => {
+                          const tFee = cls.termFees?.[t] || schoolSettings.termSettings?.[t]?.classFees?.[cls.name] || feeAmount;
+                          return (
+                            <div key={t} className="bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 text-center">
+                              <span className="text-slate-400 block text-[9px] font-bold uppercase">{t.split(' ')[0]}</span>
+                              <span className="font-bold text-slate-700 text-[10px]">{tFee}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
 
                     {/* Form Teacher */}
@@ -1158,10 +1496,10 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
-                  Summary: Class Arms, Next Term Fees &amp; Form Teachers
+                  Summary: Class Arms, Per-Term Fees (1st, 2nd, 3rd Term) &amp; Form Teachers
                 </h4>
                 <p className="text-[11px] text-slate-500">
-                  These fee amounts and teacher names appear automatically on each student&apos;s generated report card.
+                  Each term has its own specific fees, vacation date, and resumption date which print accurately on student reports.
                 </p>
               </div>
             </div>
@@ -1173,15 +1511,19 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                     <th className="py-2.5 px-3 w-10">#</th>
                     <th className="py-2.5 px-3">Class Name</th>
                     <th className="py-2.5 px-3">Section Stream</th>
-                    <th className="py-2.5 px-3">Next Term Fees (Report)</th>
-                    <th className="py-2.5 px-3">Form Teacher (Report)</th>
+                    <th className="py-2.5 px-3">1st Term Fee</th>
+                    <th className="py-2.5 px-3">2nd Term Fee</th>
+                    <th className="py-2.5 px-3">3rd Term Fee</th>
+                    <th className="py-2.5 px-3">Form Teacher</th>
                     <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {classes.map((c, idx) => {
                     const arms = getClassSections(c, sections);
-                    const fee = c.nextTermFees || schoolSettings.classFees?.[c.name] || schoolSettings.defaultNextTermFees || '₦ 16,000';
+                    const fee1 = c.termFees?.['1st Term'] || schoolSettings.termSettings?.['1st Term']?.classFees?.[c.name] || c.nextTermFees || '₦ 16,000';
+                    const fee2 = c.termFees?.['2nd Term'] || schoolSettings.termSettings?.['2nd Term']?.classFees?.[c.name] || c.nextTermFees || '₦ 16,000';
+                    const fee3 = c.termFees?.['3rd Term'] || schoolSettings.termSettings?.['3rd Term']?.classFees?.[c.name] || c.nextTermFees || '₦ 16,000';
                     return (
                       <tr key={c.id} className="hover:bg-slate-50/70 transition">
                         <td className="py-2.5 px-3 text-slate-400 font-mono">{c.order || idx + 1}</td>
@@ -1197,7 +1539,9 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                             </span>
                           )}
                         </td>
-                        <td className="py-2.5 px-3 font-bold text-emerald-800">{fee}</td>
+                        <td className="py-2.5 px-3 font-semibold text-emerald-800">{fee1}</td>
+                        <td className="py-2.5 px-3 font-semibold text-emerald-800">{fee2}</td>
+                        <td className="py-2.5 px-3 font-semibold text-emerald-800">{fee3}</td>
                         <td className="py-2.5 px-3 font-medium text-slate-700">{c.classTeacherName || '-'}</td>
                         <td className="py-2.5 px-3 text-right">
                           <button
@@ -1344,42 +1688,70 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                     </div>
                   </div>
 
-                  {/* Next Term School Fees for this class */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                          Next Term School Fees *
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="text"
-                            value={editClassFees}
-                            onChange={e => setEditClassFees(e.target.value)}
-                            placeholder="e.g. ₦ 16,000"
-                            className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                          />
-                        </div>
-                        <span className="text-[10px] text-slate-400 mt-0.5 block">
-                          Appears on this class&apos;s report cards under &apos;NEXT TERM SCHOOL FEES&apos;.
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                          Assigned Form / Class Teacher
-                        </label>
+                  {/* Assigned Teacher & Next Term School Fees for this class */}
+                  <div className="space-y-3 pt-2 border-t border-slate-100">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                        Assigned Form / Class Teacher
+                      </label>
+                      <div className="flex items-center space-x-2">
+                        <select
+                          value={editClassTeacher}
+                          onChange={e => setEditClassTeacher(e.target.value)}
+                          className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white"
+                        >
+                          <option value="">-- Select from added teachers --</option>
+                          {availableTeachers.map(t => (
+                            <option key={t.id} value={t.name}>
+                              {t.name} ({t.role})
+                            </option>
+                          ))}
+                        </select>
                         <input
                           type="text"
                           value={editClassTeacher}
                           onChange={e => setEditClassTeacher(e.target.value)}
-                          placeholder="e.g. Ustaza Aisha Muhammad Ardo"
-                          className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          placeholder="Or type custom name"
+                          className="w-48 text-xs border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                         />
-                        <span className="text-[10px] text-slate-400 mt-0.5 block">
-                          Appears on this class&apos;s report cards under &apos;FORM TEACHER&apos;S NAME&apos;.
-                        </span>
                       </div>
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                        Appears on this class&apos;s report cards under &apos;FORM TEACHER&apos;S NAME&apos;.
+                      </span>
                     </div>
+
+                    {/* Per-Term Fees Breakdown */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                        School Fees by Term (Each term can have a different fee)
+                      </label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(['1st Term', '2nd Term', '3rd Term'] as const).map(t => (
+                          <div key={t} className="bg-slate-50 p-2 rounded-lg border border-slate-200">
+                            <span className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                              {t} Fee:
+                            </span>
+                            <input
+                              type="text"
+                              value={editClassTermFees[t] || ''}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setEditClassTermFees(prev => ({ ...prev, [t]: val }));
+                                if (t === schoolSettings.currentTerm) {
+                                  setEditClassFees(val);
+                                }
+                              }}
+                              placeholder="e.g. ₦ 16,000"
+                              className="w-full text-xs font-bold border border-slate-300 rounded p-1.5 bg-white text-emerald-900 focus:ring-1 focus:ring-blue-500"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                        Report cards automatically show the fee corresponding to that term.
+                      </span>
+                    </div>
+                  </div>
 
                   {/* Data Preservation Warning */}
                   <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-blue-900 text-xs flex items-center space-x-2">
@@ -1486,7 +1858,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                 value={newSubjectName}
                 onChange={e => setNewSubjectName(e.target.value)}
                 placeholder="English Name (e.g. Hadith)"
-                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-40 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-36 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <input
                 type="text"
@@ -1494,8 +1866,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                 value={newSubjectArabic}
                 onChange={e => setNewSubjectArabic(e.target.value)}
                 placeholder="Arabic Name (e.g. الحديث)"
-                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-40 font-amiri focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-36 font-amiri focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
+              <select
+                value={newSubjectTeacher}
+                onChange={e => setNewSubjectTeacher(e.target.value)}
+                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-44 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="">-- Assign Teacher --</option>
+                {availableTeachers.map(t => (
+                  <option key={t.id} value={t.name}>
+                    {t.name} ({t.role})
+                  </option>
+                ))}
+              </select>
               <button
                 onClick={handleAddSubject}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1"
@@ -1513,6 +1897,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                   <th className="py-2.5 px-3">#</th>
                   <th className="py-2.5 px-3">Subject Name (English)</th>
                   <th className="py-2.5 px-3 text-right">Arabic Name (المادة)</th>
+                  <th className="py-2.5 px-3">Subject Teacher</th>
                   <th className="py-2.5 px-3">Assigned Classes</th>
                   <th className="py-2.5 px-3 text-center">Status</th>
                   <th className="py-2.5 px-3 text-right">Actions</th>
@@ -1527,6 +1912,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                       <td className="py-2.5 px-3 font-semibold text-slate-900">{sub.name}</td>
                       <td className="py-2.5 px-3 font-amiri font-bold text-sm text-right text-slate-900">
                         {sub.arabicName}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <select
+                          value={sub.teacherName || ''}
+                          onChange={e => handleSetSubjectTeacher(sub.id, e.target.value)}
+                          className="text-xs border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-800 font-medium focus:ring-1 focus:ring-blue-500 max-w-[170px]"
+                        >
+                          <option value="">-- Unassigned --</option>
+                          {availableTeachers.map(t => (
+                            <option key={t.id} value={t.name}>
+                              {t.name} ({t.role})
+                            </option>
+                          ))}
+                        </select>
                       </td>
                       <td className="py-2.5 px-3">
                         <button
@@ -1693,6 +2092,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                   <thead className="bg-slate-100 text-slate-700 font-semibold uppercase text-[11px] divide-x divide-slate-200">
                     <tr>
                       <th className="py-3 px-3 w-48 bg-slate-100 sticky left-0 z-10">Subject (English &amp; Arabic)</th>
+                      <th className="py-3 px-3 min-w-[170px] bg-slate-100">Subject Teacher (Lead)</th>
                       <th className="py-3 px-2 text-center w-24">Row Action</th>
                       {classes.map(cls => {
                         const countAssigned = subjects.filter(s =>
@@ -1736,6 +2136,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                           <div className="text-[11px] text-slate-500 font-amiri font-bold">
                             {sub.arabicName}
                           </div>
+                        </td>
+                        <td className="py-2 px-3 bg-white">
+                          <select
+                            value={sub.teacherName || ''}
+                            onChange={e => handleSetSubjectTeacher(sub.id, e.target.value)}
+                            className="w-full text-xs border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-800 font-medium focus:ring-1 focus:ring-blue-500"
+                          >
+                            <option value="">-- No Teacher --</option>
+                            {availableTeachers.map(t => (
+                              <option key={t.id} value={t.name}>
+                                {t.name} ({t.role})
+                              </option>
+                            ))}
+                          </select>
                         </td>
                         <td className="py-2.5 px-2 text-center">
                           <div className="flex items-center justify-center space-x-1 text-[10px]">
@@ -1856,40 +2270,72 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                     selectedAllocationClass,
                     classes
                   );
+                  const assignedTeacher = sub.classTeachers?.[selectedAllocationClass] || sub.teacherName || '';
                   return (
                     <div
                       key={sub.id}
-                      onClick={() => handleToggleSubjectClass(sub.id, selectedAllocationClass)}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition flex items-center justify-between gap-3 ${
+                      className={`p-3.5 rounded-xl border transition flex flex-col justify-between ${
                         isAssigned
                           ? 'bg-emerald-50/70 border-emerald-300 shadow-xs'
                           : 'bg-slate-50/70 border-slate-200 hover:bg-white'
                       }`}
                     >
-                      <div>
-                        <div className="font-bold text-slate-900 text-sm">{sub.name}</div>
-                        <div className="text-xs text-slate-500 font-amiri font-bold">
-                          {sub.arabicName}
+                      <div
+                        onClick={() => handleToggleSubjectClass(sub.id, selectedAllocationClass)}
+                        className="flex items-center justify-between gap-3 cursor-pointer select-none"
+                      >
+                        <div>
+                          <div className="font-bold text-slate-900 text-sm">{sub.name}</div>
+                          <div className="text-xs text-slate-500 font-amiri font-bold">
+                            {sub.arabicName}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center space-x-2 flex-shrink-0">
+                          <span
+                            className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
+                              isAssigned
+                                ? 'bg-emerald-200/70 text-emerald-900'
+                                : 'bg-slate-200 text-slate-600'
+                            }`}
+                          >
+                            {isAssigned ? 'Assigned' : 'Excluded'}
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={isAssigned}
+                            onChange={() => {}} // Handled by card onClick
+                            className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 pointer-events-none"
+                          />
                         </div>
                       </div>
 
-                      <div className="flex items-center space-x-2 flex-shrink-0">
-                        <span
-                          className={`text-[11px] font-semibold px-2 py-0.5 rounded ${
-                            isAssigned
-                              ? 'bg-emerald-200/70 text-emerald-900'
-                              : 'bg-slate-200 text-slate-600'
-                          }`}
+                      {/* Dropdown of added teachers for assigned subject in this class */}
+                      {isAssigned && (
+                        <div
+                          className="mt-3 pt-2.5 border-t border-emerald-200/80 flex items-center justify-between gap-2"
+                          onClick={e => e.stopPropagation()}
                         >
-                          {isAssigned ? 'Assigned' : 'Excluded'}
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={isAssigned}
-                          onChange={() => {}} // Handled by card onClick
-                          className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 pointer-events-none"
-                        />
-                      </div>
+                          <label className="text-[11px] font-bold text-slate-700 flex items-center space-x-1 whitespace-nowrap">
+                            <UserCheck className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>Teacher:</span>
+                          </label>
+                          <select
+                            value={sub.classTeachers?.[selectedAllocationClass] ?? ''}
+                            onChange={e => handleSetSubjectClassTeacher(sub.id, selectedAllocationClass, e.target.value)}
+                            className="text-xs border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-800 font-medium focus:ring-1 focus:ring-blue-500 w-full max-w-[190px]"
+                          >
+                            <option value="">
+                              {sub.teacherName ? `Default (${sub.teacherName})` : '-- Select Teacher --'}
+                            </option>
+                            {availableTeachers.map(t => (
+                              <option key={t.id} value={t.name}>
+                                {t.name} ({t.role})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1935,6 +2381,25 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                           Currently assigned to: <strong>{summary.label}</strong> ({summary.count} of{' '}
                           {classes.length} classes).
                         </p>
+
+                        <div className="mt-2.5 flex items-center space-x-2">
+                          <span className="text-xs font-bold text-slate-700 flex items-center space-x-1">
+                            <UserCheck className="w-3.5 h-3.5 text-blue-700" />
+                            <span>Lead Subject Teacher:</span>
+                          </span>
+                          <select
+                            value={targetSub.teacherName || ''}
+                            onChange={e => handleSetSubjectTeacher(targetSub.id, e.target.value)}
+                            className="text-xs font-semibold border border-slate-300 rounded-md px-2.5 py-1 bg-white text-slate-800 focus:ring-1 focus:ring-blue-500"
+                          >
+                            <option value="">-- No Default Teacher --</option>
+                            {availableTeachers.map(t => (
+                              <option key={t.id} value={t.name}>
+                                {t.name} ({t.role})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
 
                       <div className="flex items-center space-x-2">
@@ -1961,20 +2426,47 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                         return (
                           <div
                             key={cls.id}
-                            onClick={() => handleToggleSubjectClass(targetSub.id, cls.name)}
-                            className={`p-3 rounded-lg border cursor-pointer transition flex items-center justify-between ${
+                            className={`p-3 rounded-lg border transition flex flex-col justify-between ${
                               isAssigned
                                 ? 'bg-emerald-50/70 border-emerald-300 shadow-xs'
                                 : 'bg-white border-slate-200 hover:bg-slate-50'
                             }`}
                           >
-                            <span className="text-xs font-bold text-slate-900">{cls.name}</span>
-                            <input
-                              type="checkbox"
-                              checked={isAssigned}
-                              onChange={() => {}} // Handled by onClick
-                              className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 pointer-events-none"
-                            />
+                            <div
+                              onClick={() => handleToggleSubjectClass(targetSub.id, cls.name)}
+                              className="flex items-center justify-between cursor-pointer select-none"
+                            >
+                              <span className="text-xs font-bold text-slate-900">{cls.name}</span>
+                              <input
+                                type="checkbox"
+                                checked={isAssigned}
+                                onChange={() => {}} // Handled by onClick
+                                className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 pointer-events-none"
+                              />
+                            </div>
+
+                            {isAssigned && (
+                              <div
+                                className="mt-2 pt-2 border-t border-emerald-200/60 flex items-center justify-between gap-1 text-[11px]"
+                                onClick={e => e.stopPropagation()}
+                              >
+                                <span className="text-slate-500 text-[10px] font-semibold">Teacher:</span>
+                                <select
+                                  value={targetSub.classTeachers?.[cls.name] ?? ''}
+                                  onChange={e => handleSetSubjectClassTeacher(targetSub.id, cls.name, e.target.value)}
+                                  className="text-[11px] font-semibold border border-slate-300 rounded px-1.5 py-0.5 bg-white text-slate-800 max-w-[130px]"
+                                >
+                                  <option value="">
+                                    {targetSub.teacherName ? `Default (${targetSub.teacherName})` : '-- Select --'}
+                                  </option>
+                                  {availableTeachers.map(t => (
+                                    <option key={t.id} value={t.name}>
+                                      {t.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
