@@ -86,25 +86,37 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
     return getSectionsForClass(className, db.classes, db.sections);
   }, [className, db.classes, db.sections]);
 
+  const hasSections = classSections.length > 0;
+
   const [section, setSection] = useState<string>(
-    isTeacher && teacherSection
-      ? teacherSection
-      : (initialSection && classSections.includes(initialSection)
-          ? initialSection
-          : (classSections[0] || 'A'))
+    hasSections
+      ? (isTeacher && teacherSection
+          ? teacherSection
+          : (initialSection && classSections.includes(initialSection)
+              ? initialSection
+              : (classSections[0] || 'A')))
+      : ''
   );
 
   // Synchronize section if current section is not valid for this class
   useEffect(() => {
-    if (classSections.length > 0 && !classSections.includes(section)) {
-      setSection(classSections[0]);
+    if (hasSections) {
+      if (!classSections.includes(section)) {
+        setSection(classSections[0] || 'A');
+      }
+    } else {
+      setSection('');
     }
-  }, [className, classSections]);
+  }, [className, classSections, hasSections]);
 
-  // Available students in current class and section
-  const eligibleStudents = db.students.filter(
-    s => s.className === className && s.section === section && s.status === 'Active'
-  );
+  // Available students in current class and section (if no sections, all students in class)
+  const eligibleStudents = db.students.filter(s => {
+    if (s.className !== className || s.status !== 'Active') return false;
+    if (hasSections) {
+      return s.section === section;
+    }
+    return true;
+  });
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
     initialStudentId || (eligibleStudents[0]?.studentId || '')
@@ -245,17 +257,49 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
         }
       });
 
+      const matchedClass = db.classes.find(
+        c => c.name.toLowerCase().trim() === className.toLowerCase().trim()
+      );
+      const defaultFees =
+        matchedClass?.nextTermFees ||
+        db.settings.classFees?.[className] ||
+        db.settings.defaultNextTermFees ||
+        '₦ 16,000';
+      const defaultSchoolCloses =
+        db.settings.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026';
+      const defaultNextTermBegins =
+        db.settings.nextTermBegins || '04th Muharram 1448 / 20th July 2026';
+      const defaultTeacher =
+        matchedClass?.classTeacherName ||
+        (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');
+
       setSubjectScores(finalScores);
       setDaysOpened(existing.daysOpened ?? 90);
       setDaysPresent(existing.daysPresent ?? 85);
       setPsychomotorRatings(existing.psychomotorRatings || {});
-      setFormTeacherName(existing.formTeacherName || 'Aisha Muhammad Ardo');
+      setFormTeacherName(existing.formTeacherName || defaultTeacher);
       setFormTeacherComment(existing.formTeacherComment || 'Good academic progress.');
       setPromotionRemark(existing.promotionRemark || 'PASS & PROMOTED');
-      setSchoolCloses(existing.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026');
-      setNextTermBegins(existing.nextTermBegins || '04th Muharram 1448 / 20th July 2026');
-      setNextTermFees(existing.nextTermFees || '₦ 16,000');
+      setSchoolCloses(existing.schoolCloses || defaultSchoolCloses);
+      setNextTermBegins(existing.nextTermBegins || defaultNextTermBegins);
+      setNextTermFees(existing.nextTermFees || defaultFees);
     } else {
+      const matchedClass = db.classes.find(
+        c => c.name.toLowerCase().trim() === className.toLowerCase().trim()
+      );
+      const defaultFees =
+        matchedClass?.nextTermFees ||
+        db.settings.classFees?.[className] ||
+        db.settings.defaultNextTermFees ||
+        '₦ 16,000';
+      const defaultSchoolCloses =
+        db.settings.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026';
+      const defaultNextTermBegins =
+        db.settings.nextTermBegins || '04th Muharram 1448 / 20th July 2026';
+      const defaultTeacher =
+        matchedClass?.classTeacherName ||
+        (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');
+
       // Initialize with ONLY active subjects assigned to this class
       const initialScores: SubjectScore[] = applicableSubjects.map(sub => ({
         subjectId: sub.id,
@@ -276,6 +320,12 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
         defaultPsy[p.id] = 'A';
       });
       setPsychomotorRatings(defaultPsy);
+      setFormTeacherName(defaultTeacher);
+      setFormTeacherComment('Good academic progress.');
+      setPromotionRemark('PASS & PROMOTED');
+      setSchoolCloses(defaultSchoolCloses);
+      setNextTermBegins(defaultNextTermBegins);
+      setNextTermFees(defaultFees);
     }
   }, [selectedStudentId, session, term, className, db.assessments, db.subjects, db.classes, db.psychomotorItems, applicableSubjects]);
 
@@ -552,7 +602,11 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
               {isTeacher && teacherSection ? 'Section (Locked)' : 'Section'}
             </label>
-            {isTeacher && teacherSection ? (
+            {!hasSections ? (
+              <div className="w-full text-xs font-medium border border-slate-200 rounded p-2 bg-slate-100 text-slate-500 italic flex items-center justify-between">
+                <span>No Section (Single Stream)</span>
+              </div>
+            ) : isTeacher && teacherSection ? (
               <div className="w-full text-xs font-bold border border-amber-300 rounded p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
                 <span>Section {section}</span>
                 <Lock className="w-3.5 h-3.5 text-amber-600" />

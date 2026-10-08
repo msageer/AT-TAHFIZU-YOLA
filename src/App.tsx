@@ -746,6 +746,11 @@ export default function App() {
             setActiveTab={setActiveTab}
             onSelectAssessmentStudent={navigateToAssessment}
             onSelectReportStudent={navigateToReport}
+            onSaveStudent={handleSaveStudent}
+            onSelectStudentProfile={studentId => {
+              setSelectedStudentForProfileId(studentId);
+              setActiveTab('students');
+            }}
           />
         )}
 

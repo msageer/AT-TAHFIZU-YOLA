@@ -53,9 +53,10 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
   } | null>(null);
 
   // Eligible students in 'From Class'
+  const fromClassArms = getSectionsForClass(fromClass, db.classes, db.sections);
   const eligibleStudents = db.students.filter(s => {
     if (s.className !== fromClass) return false;
-    if (fromSection !== 'ALL' && s.section !== fromSection) return false;
+    if (fromClassArms.length > 0 && fromSection !== 'ALL' && s.section !== fromSection) return false;
     return s.status === 'Active';
   });
 
@@ -184,21 +185,27 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
 
               <div>
                 <label className="block text-[11px] font-medium text-slate-500 uppercase">Section</label>
-                <select
-                  value={fromSection}
-                  onChange={e => {
-                    setFromSection(e.target.value);
-                    setSelectedStudentIds([]);
-                  }}
-                  className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-white"
-                >
-                  <option value="ALL">All Sections</option>
-                  {getSectionsForClass(fromClass, db.classes, db.sections).map(secName => (
-                    <option key={secName} value={secName}>
-                      Section {secName}
-                    </option>
-                  ))}
-                </select>
+                {fromClassArms.length === 0 ? (
+                  <div className="w-full text-xs font-medium border border-slate-200 rounded p-2 bg-slate-100 text-slate-500 italic">
+                    No Section
+                  </div>
+                ) : (
+                  <select
+                    value={fromSection}
+                    onChange={e => {
+                      setFromSection(e.target.value);
+                      setSelectedStudentIds([]);
+                    }}
+                    className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-white"
+                  >
+                    <option value="ALL">All Sections</option>
+                    {fromClassArms.map(secName => (
+                      <option key={secName} value={secName}>
+                        Section {secName}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
           </div>
@@ -225,8 +232,12 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
                     const newTo = e.target.value;
                     setToClass(newTo);
                     const validToSecs = getSectionsForClass(newTo, db.classes, db.sections);
-                    if (!validToSecs.includes(toSection)) {
-                      setToSection(validToSecs[0] || 'A');
+                    if (validToSecs.length > 0) {
+                      if (!validToSecs.includes(toSection)) {
+                        setToSection(validToSecs[0] || 'A');
+                      }
+                    } else {
+                      setToSection('');
                     }
                   }}
                   className="w-full text-xs font-bold border border-emerald-300 rounded p-2 bg-white text-emerald-950"
@@ -241,17 +252,23 @@ export const StudentPromotion: React.FC<StudentPromotionProps> = ({
 
               <div>
                 <label className="block text-[11px] font-medium text-slate-500 uppercase">Target Section</label>
-                <select
-                  value={toSection}
-                  onChange={e => setToSection(e.target.value)}
-                  className="w-full text-xs font-semibold border border-emerald-300 rounded p-2 bg-white text-emerald-950"
-                >
-                  {getSectionsForClass(toClass, db.classes, db.sections).map(secName => (
-                    <option key={secName} value={secName}>
-                      Section {secName}
-                    </option>
-                  ))}
-                </select>
+                {getSectionsForClass(toClass, db.classes, db.sections).length === 0 ? (
+                  <div className="w-full text-xs font-medium border border-emerald-200 rounded p-2 bg-emerald-100/50 text-emerald-800 italic">
+                    No Section (Class Only)
+                  </div>
+                ) : (
+                  <select
+                    value={toSection}
+                    onChange={e => setToSection(e.target.value)}
+                    className="w-full text-xs font-semibold border border-emerald-300 rounded p-2 bg-white text-emerald-950"
+                  >
+                    {getSectionsForClass(toClass, db.classes, db.sections).map(secName => (
+                      <option key={secName} value={secName}>
+                        Section {secName}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
           </div>

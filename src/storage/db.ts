@@ -113,12 +113,22 @@ export function getEmptyDatabase(): AppDatabase {
       isSetupComplete: true, // Initial onboarding done once!
       useSections: true,
       lastBackupAt: undefined,
+      headTeacherName: 'Ustaz Al-Amin Kaigama',
+      schoolCloses: '24th Dhul Hijjah 1447 / 10th June 2026',
+      nextTermBegins: '04th Muharram 1448 / 20th July 2026',
+      defaultNextTermFees: '₦ 16,000',
+      classFees: {
+        'Nursery One': '₦ 12,000',
+        'Nursery Two': '₦ 12,000',
+        'Primary One': '₦ 16,000',
+        'Primary Two': '₦ 16,000',
+      },
     },
     classes: [
-      { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main', sections: ['A'] },
-      { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main', sections: ['A'] },
-      { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main', sections: ['A', 'B'] },
-      { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main', sections: ['A', 'B'] },
+      { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaza Khadija Bello' },
+      { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaz Ibrahim Aliyu' },
+      { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaza Aisha Muhammad Ardo' },
+      { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaz Usman Bello' },
     ],
     sections: [
       { id: 'sec-1', name: 'A', schoolId: 'school-main' },
@@ -443,12 +453,12 @@ export function loadDemoDevelopmentDatabase(): AppDatabase {
   ];
 
   const demoClasses: ClassItem[] = [
-    { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main' },
-    { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main' },
-    { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main' },
-    { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main' },
-    { id: 'cls-5', name: 'Primary Three', order: 5, schoolId: 'school-main' },
-    { id: 'cls-6', name: 'Tahfiz Level 1', order: 6, schoolId: 'school-main' },
+    { id: 'cls-1', name: 'Nursery One', order: 1, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaza Khadija Bello' },
+    { id: 'cls-2', name: 'Nursery Two', order: 2, schoolId: 'school-main', sections: [], nextTermFees: '₦ 12,000', classTeacherName: 'Ustaz Ibrahim Aliyu' },
+    { id: 'cls-3', name: 'Primary One', order: 3, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaza Aisha Muhammad Ardo' },
+    { id: 'cls-4', name: 'Primary Two', order: 4, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Ustaz Usman Bello' },
+    { id: 'cls-5', name: 'Primary Three', order: 5, schoolId: 'school-main', sections: ['A', 'B'], nextTermFees: '₦ 16,000', classTeacherName: 'Mallam Abubakar Sani' },
+    { id: 'cls-6', name: 'Tahfiz Level 1', order: 6, schoolId: 'school-main', sections: [], nextTermFees: '₦ 20,000', classTeacherName: 'Ustaz Mahmoud Al-Qari' },
   ];
 
   const demoSections: SectionItem[] = [

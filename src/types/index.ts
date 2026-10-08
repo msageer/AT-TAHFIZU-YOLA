@@ -60,6 +60,12 @@ export interface SchoolSettings {
   isSetupComplete: boolean;
   useSections?: boolean;
   lastBackupAt?: string;
+  // Leadership & Term Calendar Settings
+  headTeacherName?: string; // Head Teacher / Principal Name
+  schoolCloses?: string; // School Vacation / Closing Date
+  nextTermBegins?: string; // School Resumption / Opening Date
+  defaultNextTermFees?: string; // Global fallback fees e.g. "₦ 16,000"
+  classFees?: Record<string, string>; // Per-class fees mapping e.g. { "Nursery One": "₦ 12,000" }
 }
 
 export interface ClassItem {
@@ -67,7 +73,9 @@ export interface ClassItem {
   schoolId?: string;
   name: string;
   order: number;
-  sections?: string[]; // Specific sections/arms for this class e.g. ['A'], ['A', 'B'], ['Tahfiz'], or ['Single Arm']
+  sections?: string[]; // Specific sections/arms for this class: [] (Default / No Section), or ['A', 'B'] (Arms A & B)
+  nextTermFees?: string; // Specific next term fees for this class e.g. "₦ 14,000"
+  classTeacherName?: string; // Assigned class / form teacher name
 }
 
 export interface SectionItem {

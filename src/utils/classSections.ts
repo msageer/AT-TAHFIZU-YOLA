@@ -2,35 +2,79 @@ import { ClassItem, SectionItem, AppDatabase } from '../types';
 
 /**
  * Returns the configured arms/sections for a given class.
- * If the class has specific sections defined, returns them (e.g. ['A'], ['A', 'B'], ['Tahfiz']).
- * Otherwise, falls back to the school's global sections or ['A'].
+ * "For class that do not have A or B mean is just the class with no section"
+ * - If a class has both Arms A and B (e.g. ['A', 'B']), returns them.
+ * - If a class does not have A and B (e.g. empty [], ['A'], or not configured), returns [] (no section).
  */
 export function getClassSections(
   cls: ClassItem | undefined,
   globalSections: SectionItem[] = []
 ): string[] {
-  if (cls?.sections && Array.isArray(cls.sections) && cls.sections.length > 0) {
-    return cls.sections;
+  if (!cls) return [];
+  if (cls.sections !== undefined && Array.isArray(cls.sections)) {
+    // A class must have both 'A' and 'B' arms to be divided into sections.
+    // Otherwise, it is just the class with no section.
+    const hasA = cls.sections.includes('A');
+    const hasB = cls.sections.includes('B');
+    if (hasA && hasB) {
+      return cls.sections;
+    }
+    return [];
   }
-  const globalNames = (globalSections || []).map(s => s.name);
-  return globalNames.length > 0 ? globalNames : ['A'];
+  // Default for classes without explicit sections: check if name is Primary (with A&B)
+  const nameLower = cls.name.toLowerCase();
+  if (nameLower.includes('primary') && !nameLower.includes('nursery')) {
+    return ['A', 'B'];
+  }
+  return [];
 }
 
 /**
- * Looks up a class by name or id and returns its applicable sections.
+ * Looks up a class by name or id and returns its applicable sections (empty [] if no section).
  */
 export function getSectionsForClass(
   className: string,
   classes: ClassItem[] = [],
   globalSections: SectionItem[] = []
 ): string[] {
-  if (!className) return ['A'];
+  if (!className) return [];
   const matchedClass = classes.find(
     c =>
       c.name.toLowerCase().trim() === className.toLowerCase().trim() ||
       c.id === className
   );
   return getClassSections(matchedClass, globalSections);
+}
+
+/**
+ * Returns true if the class has configured arms/sections (e.g. A and B).
+ * Returns false if the class has NO section (single stream).
+ */
+export function hasClassSections(
+  className: string,
+  classes: ClassItem[] = [],
+  globalSections: SectionItem[] = []
+): boolean {
+  const sections = getSectionsForClass(className, classes, globalSections);
+  return sections.length > 0;
+}
+
+/**
+ * Formats a student's class and section.
+ * If the class has NO section (i.e. no A or B), returns just the class name (e.g. "Nursery One").
+ * If the class has sections, returns "Primary One (Section A)" or "Primary One (A)".
+ */
+export function formatClassWithSection(
+  className: string,
+  section?: string,
+  classes: ClassItem[] = []
+): string {
+  if (!className) return '';
+  const hasSections = hasClassSections(className, classes);
+  if (!hasSections || !section || section === '-' || section.toLowerCase() === 'none' || section.trim() === '') {
+    return className;
+  }
+  return `${className} (${section})`;
 }
 
 /**
@@ -48,7 +92,9 @@ export function cascadeRenameClass(
   oldClassName: string,
   newClassName: string,
   newSections?: string[],
-  newOrder?: number
+  newOrder?: number,
+  newFees?: string,
+  newTeacher?: string
 ): AppDatabase {
   const oldTrimmed = oldClassName.trim();
   const newTrimmed = newClassName.trim();
@@ -61,20 +107,29 @@ export function cascadeRenameClass(
         name: newTrimmed,
         ...(newSections !== undefined ? { sections: newSections } : {}),
         ...(newOrder !== undefined ? { order: newOrder } : {}),
+        ...(newFees !== undefined ? { nextTermFees: newFees } : {}),
+        ...(newTeacher !== undefined ? { classTeacherName: newTeacher } : {}),
       };
     }
     return c;
   });
 
-  // If class name did not change, but sections/order changed:
-  const isRename = oldTrimmed.toLowerCase() !== newTrimmed.toLowerCase();
+  // Determine if class has sections under new configuration
+  const hasValidArms =
+    newSections !== undefined
+      ? newSections.includes('A') && newSections.includes('B')
+      : true;
 
   // 2. Cascade to students
   const updatedStudents = db.students.map(s => {
     if (s.className.toLowerCase().trim() === oldTrimmed.toLowerCase()) {
       let nextSection = s.section;
-      if (newSections && newSections.length > 0 && !newSections.includes(s.section)) {
-        nextSection = newSections[0];
+      if (newSections !== undefined) {
+        if (!hasValidArms) {
+          nextSection = '';
+        } else if (!newSections.includes(s.section)) {
+          nextSection = newSections[0] || 'A';
+        }
       }
       return {
         ...s,
@@ -89,13 +144,19 @@ export function cascadeRenameClass(
   const updatedAssessments = db.assessments.map(a => {
     if (a.className.toLowerCase().trim() === oldTrimmed.toLowerCase()) {
       let nextSection = a.section;
-      if (newSections && newSections.length > 0 && !newSections.includes(a.section)) {
-        nextSection = newSections[0];
+      if (newSections !== undefined) {
+        if (!hasValidArms) {
+          nextSection = '';
+        } else if (!newSections.includes(a.section)) {
+          nextSection = newSections[0] || 'A';
+        }
       }
       return {
         ...a,
         className: newTrimmed,
         section: nextSection,
+        ...(newFees ? { nextTermFees: newFees } : {}),
+        ...(newTeacher ? { formTeacherName: newTeacher } : {}),
       };
     }
     return a;
@@ -105,8 +166,12 @@ export function cascadeRenameClass(
   const updatedAttendance = (db.attendance || []).map(att => {
     if (att.className.toLowerCase().trim() === oldTrimmed.toLowerCase()) {
       let nextSection = att.section;
-      if (newSections && newSections.length > 0 && !newSections.includes(att.section)) {
-        nextSection = newSections[0];
+      if (newSections !== undefined) {
+        if (!hasValidArms) {
+          nextSection = '';
+        } else if (!newSections.includes(att.section)) {
+          nextSection = newSections[0] || 'A';
+        }
       }
       return {
         ...att,

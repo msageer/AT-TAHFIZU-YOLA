@@ -1,6 +1,7 @@
 import React from 'react';
-import { SchoolSettings, Student, AssessmentRecord, GradeBoundary, PsychomotorItem } from '../types';
+import { SchoolSettings, Student, AssessmentRecord, GradeBoundary, PsychomotorItem, ClassItem } from '../types';
 import { ClassStatistics } from '../utils/ranking';
+import { formatClassWithSection } from '../utils/classSections';
 
 interface ReportSheetProps {
   settings: SchoolSettings;
@@ -9,6 +10,7 @@ interface ReportSheetProps {
   stats: ClassStatistics;
   gradingBoundaries: GradeBoundary[];
   psychomotorItems: PsychomotorItem[];
+  classes?: ClassItem[];
 }
 
 export const ReportSheet: React.FC<ReportSheetProps> = ({
@@ -18,9 +20,42 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   stats,
   gradingBoundaries,
   psychomotorItems,
+  classes = [],
 }) => {
   const subjectScores = assessment.subjectScores || [];
   const isCompact = subjectScores.length > 8;
+
+  // Resolve per-class school fees and teacher information from settings / class configuration
+  const targetClassName = assessment.className || student.className;
+  const matchedClass = classes.find(
+    c => c.name.toLowerCase().trim() === (targetClassName || '').toLowerCase().trim()
+  );
+
+  const resolvedFees =
+    matchedClass?.nextTermFees ||
+    settings.classFees?.[targetClassName] ||
+    assessment.nextTermFees ||
+    settings.defaultNextTermFees ||
+    '₦ 16,000';
+
+  const resolvedSchoolCloses =
+    settings.schoolCloses ||
+    assessment.schoolCloses ||
+    '24th Dhul Hijjah 1447 / 10th June 2026';
+
+  const resolvedNextTermBegins =
+    settings.nextTermBegins ||
+    assessment.nextTermBegins ||
+    '04th Muharram 1448 / 20th July 2026';
+
+  const resolvedFormTeacher =
+    assessment.formTeacherName ||
+    matchedClass?.classTeacherName ||
+    'Class Form Teacher';
+
+  const resolvedHeadTeacher =
+    settings.headTeacherName ||
+    'Ustaz Al-Amin Kaigama';
 
   return (
     <div className="report-sheet-root relative bg-white text-black p-2.5 sm:p-3 mx-auto font-sans leading-tight border-2 border-black rounded-none shadow-sm w-full max-w-[200mm] min-h-[280mm] max-h-[285mm] box-border print:border-2 print:border-black print:p-2 print:shadow-none print:w-full print:h-full print:max-h-[285mm] overflow-hidden flex flex-col justify-between">
@@ -103,8 +138,11 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             <div className="flex items-center">
               <span className="font-bold uppercase w-16 text-slate-950">CLASS:</span>
               <span className="font-bold text-slate-950 flex-1 border-b border-dotted border-slate-600 pl-1 truncate">
-                {assessment.className || student.className}{' '}
-                {assessment.section ? `(${assessment.section})` : student.section ? `(${student.section})` : ''}
+                {formatClassWithSection(
+                  assessment.className || student.className,
+                  assessment.section || student.section,
+                  classes
+                )}
               </span>
             </div>
             <div className="flex items-center">
@@ -330,7 +368,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
           <div className="flex items-center border-b border-slate-300 pb-0.5">
             <span className="font-bold uppercase text-slate-950 w-44">FORM TEACHER&apos;S NAME:</span>
             <span className="font-bold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
-              {assessment.formTeacherName || 'Class Form Teacher'}
+              {resolvedFormTeacher}
             </span>
           </div>
 
@@ -344,11 +382,22 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
             </span>
           </div>
 
+          {/* Head Teacher Name & Signature */}
+          <div className="flex items-center border-b border-slate-300 pb-0.5">
+            <span className="font-bold uppercase text-slate-950 w-44">HEAD TEACHER&apos;S NAME:</span>
+            <span className="font-bold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
+              {resolvedHeadTeacher}
+            </span>
+            <span className="font-bold text-[9px] uppercase text-slate-700 ml-2 whitespace-nowrap">
+              Sign / Stamp: ________________
+            </span>
+          </div>
+
           {/* School Closes */}
           <div className="flex items-center border-b border-slate-300 pb-0.5">
             <span className="font-bold uppercase text-slate-950 w-44">School closes:</span>
             <span className="font-semibold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
-              {assessment.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026'}
+              {resolvedSchoolCloses}
             </span>
           </div>
 
@@ -356,7 +405,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
           <div className="flex items-center border-b border-slate-300 pb-0.5">
             <span className="font-bold uppercase text-slate-950 w-44">NEXT TERM BEGINS:</span>
             <span className="font-semibold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1 truncate">
-              {assessment.nextTermBegins || '04th Muharram 1448 / 20th July 2026'}
+              {resolvedNextTermBegins}
             </span>
           </div>
 
@@ -364,7 +413,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
           <div className="flex items-center">
             <span className="font-bold uppercase text-slate-950 w-44">NEXT TERM SCHOOL FEES:</span>
             <span className="font-bold text-slate-950 border-b border-dotted border-slate-500 pl-1 flex-1">
-              {assessment.nextTermFees || '₦ 16,000'}
+              {resolvedFees}
             </span>
           </div>
         </div>

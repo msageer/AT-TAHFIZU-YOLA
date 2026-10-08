@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Student, AppDatabase, NavigationTab, UserAccount } from '../types';
 import { ConfirmModal } from './ConfirmModal';
-import { getSectionsForClass } from '../utils/classSections';
+import { getSectionsForClass, formatClassWithSection } from '../utils/classSections';
 import {
   Search,
   Plus,
@@ -126,7 +126,10 @@ export const Students: React.FC<StudentsProps> = ({
     }
 
     if (!isTeacher && filterClass !== 'ALL' && student.className !== filterClass) return false;
-    if (!isTeacher && filterSection !== 'ALL' && student.section !== filterSection) return false;
+    if (!isTeacher && filterSection !== 'ALL') {
+      const clsArms = getSectionsForClass(student.className, db.classes, db.sections);
+      if (clsArms.length > 0 && student.section !== filterSection) return false;
+    }
     if (filterGender !== 'ALL' && student.gender !== filterGender) return false;
     if (filterStatus !== 'ALL' && student.status !== filterStatus) return false;
 
@@ -138,14 +141,19 @@ export const Students: React.FC<StudentsProps> = ({
     const nextSeq = db.students.length + 1;
     const autoId = `STU-${new Date().getFullYear()}-${String(nextSeq).padStart(3, '0')}`;
     const autoAdm = `ADM/${new Date().getFullYear()}/${String(nextSeq).padStart(3, '0')}`;
+    const defaultCls = isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One');
+    const defaultArms = getSectionsForClass(defaultCls, db.classes, db.sections);
+    const defaultSec = isTeacher && teacherSection
+      ? teacherSection
+      : (defaultArms.length > 0 ? (defaultArms[0] || 'A') : '');
 
     setEditingStudent(null);
     setFormData({
       studentId: autoId,
       admissionNumber: autoAdm,
       name: '',
-      className: isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One'),
-      section: isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A'),
+      className: defaultCls,
+      section: defaultSec,
       gender: 'Male',
       dateOfBirth: '',
       parentName: '',
@@ -206,6 +214,7 @@ export const Students: React.FC<StudentsProps> = ({
       }
     }
 
+    const classArms = getSectionsForClass(formData.className || db.classes[0]?.name || 'Nursery One', db.classes, db.sections);
     const studentToSave: Student = {
       id: editingStudent ? editingStudent.id : `stu-${Date.now()}`,
       studentId: formData.studentId!.trim(),
@@ -213,7 +222,7 @@ export const Students: React.FC<StudentsProps> = ({
         formData.admissionNumber?.trim() || `ADM-${formData.studentId!.trim()}`,
       name: formData.name!.trim(),
       className: formData.className || db.classes[0]?.name || 'Nursery One',
-      section: formData.section || db.sections[0]?.name || 'A',
+      section: classArms.length === 0 ? '' : (formData.section || classArms[0] || 'A'),
       gender: formData.gender as 'Male' | 'Female',
       dateOfBirth: formData.dateOfBirth,
       parentName: formData.parentName?.trim(),
@@ -367,7 +376,16 @@ export const Students: React.FC<StudentsProps> = ({
           <div>
             <select
               value={filterClass}
-              onChange={e => setFilterClass(e.target.value)}
+              onChange={e => {
+                const newCls = e.target.value;
+                setFilterClass(newCls);
+                const arms = newCls === 'ALL' ? [] : getSectionsForClass(newCls, db.classes, db.sections);
+                if (arms.length === 0) {
+                  setFilterSection('ALL');
+                } else if (filterSection !== 'ALL' && !arms.includes(filterSection)) {
+                  setFilterSection('ALL');
+                }
+              }}
               className="w-full text-xs border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="ALL">All Classes</option>
@@ -381,21 +399,27 @@ export const Students: React.FC<StudentsProps> = ({
 
           {/* Section Filter */}
           <div>
-            <select
-              value={filterSection}
-              onChange={e => setFilterSection(e.target.value)}
-              className="w-full text-xs border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="ALL">All Sections</option>
-              {(filterClass === 'ALL'
-                ? db.sections.map(s => s.name)
-                : getSectionsForClass(filterClass, db.classes, db.sections)
-              ).map(secName => (
-                <option key={secName} value={secName}>
-                  Section {secName}
-                </option>
-              ))}
-            </select>
+            {filterClass !== 'ALL' && getSectionsForClass(filterClass, db.classes, db.sections).length === 0 ? (
+              <div className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-slate-100 text-slate-500 italic flex items-center justify-between">
+                <span>No Section</span>
+              </div>
+            ) : (
+              <select
+                value={filterSection}
+                onChange={e => setFilterSection(e.target.value)}
+                className="w-full text-xs border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="ALL">All Sections</option>
+                {(filterClass === 'ALL'
+                  ? db.sections.map(s => s.name)
+                  : getSectionsForClass(filterClass, db.classes, db.sections)
+                ).map(secName => (
+                  <option key={secName} value={secName}>
+                    Section {secName}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Status Filter */}
@@ -544,8 +568,9 @@ export const Students: React.FC<StudentsProps> = ({
                       </td>
 
                       <td className="py-3 px-4">
-                        <span className="font-semibold text-slate-800">{student.className}</span>
-                        <span className="text-slate-500 ml-1 text-xs">({student.section})</span>
+                        <span className="font-semibold text-slate-800">
+                          {formatClassWithSection(student.className, student.section, db.classes)}
+                        </span>
                       </td>
 
                       <td className="py-3 px-4">
@@ -718,9 +743,11 @@ export const Students: React.FC<StudentsProps> = ({
                       setFormData(prev => ({
                         ...prev,
                         className: newCls,
-                        section: validSections.includes(prev.section || '')
-                          ? (prev.section || 'A')
-                          : validSections[0] || 'A',
+                        section: validSections.length === 0
+                          ? ''
+                          : validSections.includes(prev.section || '')
+                          ? (prev.section || validSections[0])
+                          : validSections[0],
                       }));
                     }}
                     className="w-full text-xs border border-slate-300 rounded p-2 bg-white"
@@ -735,21 +762,27 @@ export const Students: React.FC<StudentsProps> = ({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                    Section / Arm *
+                    Section / Arm
                   </label>
-                  <select
-                    value={formData.section}
-                    onChange={e => setFormData({ ...formData, section: e.target.value })}
-                    className="w-full text-xs border border-slate-300 rounded p-2 bg-white"
-                  >
-                    {getSectionsForClass(formData.className || '', db.classes, db.sections).map(
-                      secName => (
-                        <option key={secName} value={secName}>
-                          Section {secName}
-                        </option>
-                      )
-                    )}
-                  </select>
+                  {getSectionsForClass(formData.className || '', db.classes, db.sections).length === 0 ? (
+                    <div className="w-full text-xs font-medium border border-slate-200 rounded p-2 bg-slate-100 text-slate-500 italic">
+                      No Section (Class Only)
+                    </div>
+                  ) : (
+                    <select
+                      value={formData.section}
+                      onChange={e => setFormData({ ...formData, section: e.target.value })}
+                      className="w-full text-xs border border-slate-300 rounded p-2 bg-white"
+                    >
+                      {getSectionsForClass(formData.className || '', db.classes, db.sections).map(
+                        secName => (
+                          <option key={secName} value={secName}>
+                            Section {secName}
+                          </option>
+                        )
+                      )}
+                    </select>
+                  )}
                 </div>
 
                 <div>
@@ -891,9 +924,9 @@ export const Students: React.FC<StudentsProps> = ({
             <div className="space-y-3 text-xs border-t border-slate-100 pt-3">
               <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg">
                 <div>
-                  <span className="text-slate-500 font-semibold">Class &amp; Section:</span>
+                  <span className="text-slate-500 font-semibold">Class Stream:</span>
                   <p className="font-bold text-slate-800">
-                    {selectedStudentForProfile.className} ({selectedStudentForProfile.section})
+                    {formatClassWithSection(selectedStudentForProfile.className, selectedStudentForProfile.section, db.classes)}
                   </p>
                 </div>
                 <div>

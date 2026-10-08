@@ -29,6 +29,9 @@ import {
   Edit2,
   X,
   Users,
+  Calendar,
+  Coins,
+  UserCheck,
 } from 'lucide-react';
 import {
   getSubjectClassAssignmentSummary,
@@ -170,29 +173,34 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
 
   // Class management handlers
   const [newClassName, setNewClassName] = useState('');
-  const [newClassSections, setNewClassSections] = useState<string[]>(['A', 'B']);
+  const [newClassSections, setNewClassSections] = useState<string[]>([]);
+  const [newClassFees, setNewClassFees] = useState('₦ 16,000');
+  const [newClassTeacher, setNewClassTeacher] = useState('');
 
   // Class edit state
   const [editingClass, setEditingClass] = useState<ClassItem | null>(null);
   const [editClassName, setEditClassName] = useState('');
   const [editClassOrder, setEditClassOrder] = useState<number>(1);
-  const [editClassSections, setEditClassSections] = useState<string[]>(['A']);
+  const [editClassSections, setEditClassSections] = useState<string[]>([]);
+  const [editClassFees, setEditClassFees] = useState('₦ 16,000');
+  const [editClassTeacher, setEditClassTeacher] = useState('');
   const [newArmName, setNewArmName] = useState('');
 
   const handleStartEditClass = (cls: ClassItem) => {
     setEditingClass(cls);
     setEditClassName(cls.name);
     setEditClassOrder(cls.order || 1);
-    setEditClassSections(getClassSections(cls, sections));
+    const configuredSections = cls.sections !== undefined && Array.isArray(cls.sections)
+      ? cls.sections
+      : getClassSections(cls, sections);
+    setEditClassSections(configuredSections);
+    setEditClassFees(cls.nextTermFees || schoolSettings.classFees?.[cls.name] || schoolSettings.defaultNextTermFees || '₦ 16,000');
+    setEditClassTeacher(cls.classTeacherName || '');
     setNewArmName('');
   };
 
   const handleToggleEditSection = (secName: string) => {
     if (editClassSections.includes(secName)) {
-      if (editClassSections.length === 1) {
-        showNotification('A class must have at least one section or arm', 'error');
-        return;
-      }
       setEditClassSections(prev => prev.filter(s => s !== secName));
     } else {
       setEditClassSections(prev => [...prev, secName]);
@@ -214,7 +222,11 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     if (!editingClass || !editClassName.trim()) return;
     const oldName = editingClass.name;
     const newName = editClassName.trim();
-    const finalSections = editClassSections.length > 0 ? editClassSections : ['A'];
+    // Classes without both A and B are treated as Default (no section)
+    const finalSections =
+      editClassSections.includes('A') && editClassSections.includes('B')
+        ? editClassSections
+        : [];
 
     const enrolledStudents = db.students.filter(
       s => s.className.toLowerCase().trim() === oldName.toLowerCase().trim()
@@ -226,8 +238,24 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
         oldName,
         newName,
         finalSections,
-        editClassOrder
+        editClassOrder,
+        editClassFees.trim() || '₦ 16,000',
+        editClassTeacher.trim()
       );
+      // Synchronize class fees into settings.classFees map
+      const updatedClassFees = {
+        ...(updatedDb.settings.classFees || {}),
+        [newName]: editClassFees.trim() || '₦ 16,000',
+      };
+      if (oldName !== newName && updatedClassFees[oldName]) {
+        delete updatedClassFees[oldName];
+      }
+      updatedDb.settings = {
+        ...updatedDb.settings,
+        classFees: updatedClassFees,
+      };
+
+      setSchoolSettings(updatedDb.settings);
       setClasses(updatedDb.classes);
       onUpdateDb(updatedDb);
       setEditingClass(null);
@@ -240,7 +268,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
         isOpen: true,
         title: 'Confirm Class Renaming & Cascade',
         message: `Are you sure you want to rename class "${oldName}" to "${newName}"? All ${enrolledStudents.length} enrolled student records, attendance data, and assessment broadsheets will be updated automatically.`,
-        details: `Class: ${oldName} \u2192 ${newName} \u2022 Arms: ${finalSections.join(', ')}`,
+        details: `Class: ${oldName} \u2192 ${newName} \u2022 Arms: ${finalSections.length > 0 ? finalSections.join(', ') : 'No Section (Single Stream)'}`,
         variant: 'primary',
         confirmText: 'Yes, Rename & Update All',
         onConfirm: proceedSave,
@@ -258,16 +286,40 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
       showNotification(`Class "${newClassName}" already exists`, 'error');
       return;
     }
+    const finalSections =
+      newClassSections.includes('A') && newClassSections.includes('B')
+        ? newClassSections
+        : [];
+
     const newClass: ClassItem = {
       id: `cls-${Date.now()}`,
       name: newClassName.trim(),
       order: classes.length + 1,
-      sections: newClassSections.length > 0 ? newClassSections : ['A'],
+      sections: finalSections,
+      nextTermFees: newClassFees.trim() || schoolSettings.defaultNextTermFees || '₦ 16,000',
+      classTeacherName: newClassTeacher.trim(),
     };
     const updated = [...classes, newClass];
     setClasses(updated);
     setNewClassName('');
-    onUpdateDb({ ...db, classes: updated });
+    setNewClassFees('₦ 16,000');
+    setNewClassTeacher('');
+    setNewClassSections([]);
+
+    const updatedClassFees: Record<string, string> = {
+      ...(schoolSettings.classFees || {}),
+      [newClass.name]: newClass.nextTermFees || '₦ 16,000',
+    };
+    const updatedDb: AppDatabase = {
+      ...db,
+      classes: updated,
+      settings: {
+        ...schoolSettings,
+        classFees: updatedClassFees,
+      },
+    };
+    setSchoolSettings(updatedDb.settings);
+    onUpdateDb(updatedDb);
     showNotification(`Class "${newClass.name}" added successfully!`);
   };
 
@@ -808,6 +860,93 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                   </select>
                 </div>
               </div>
+
+              {/* Report Sheet Information: Leadership, Calendar & Term Dates */}
+              <div className="pt-4 border-t border-slate-200 space-y-3">
+                <div className="flex items-center space-x-2">
+                  <Calendar className="w-4 h-4 text-emerald-600" />
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+                    Report Sheet Leadership &amp; Calendar Dates
+                  </h4>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  These settings automatically appear on every student&apos;s printed report card.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                      Head Teacher / Principal Name
+                    </label>
+                    <input
+                      type="text"
+                      value={schoolSettings.headTeacherName || ''}
+                      onChange={e =>
+                        setSchoolSettings({ ...schoolSettings, headTeacherName: e.target.value })
+                      }
+                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="e.g. Ustaz Al-Amin Kaigama"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Printed on report card under HEAD TEACHER&apos;S NAME with signature line.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                      Default Next Term School Fees
+                    </label>
+                    <input
+                      type="text"
+                      value={schoolSettings.defaultNextTermFees || ''}
+                      onChange={e =>
+                        setSchoolSettings({ ...schoolSettings, defaultNextTermFees: e.target.value })
+                      }
+                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="e.g. ₦ 16,000"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Default fee for any class without a custom fee configured.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                      School Vacation / Closing Date
+                    </label>
+                    <input
+                      type="text"
+                      value={schoolSettings.schoolCloses || ''}
+                      onChange={e =>
+                        setSchoolSettings({ ...schoolSettings, schoolCloses: e.target.value })
+                      }
+                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="e.g. 24th Dhul Hijjah 1447 / 10th June 2026"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Printed on report card under &apos;School closes&apos;.
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                      Next Term Resumption / Opening Date
+                    </label>
+                    <input
+                      type="text"
+                      value={schoolSettings.nextTermBegins || ''}
+                      onChange={e =>
+                        setSchoolSettings({ ...schoolSettings, nextTermBegins: e.target.value })
+                      }
+                      className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      placeholder="e.g. 04th Muharram 1448 / 20th July 2026"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      Printed on report card under &apos;NEXT TERM BEGINS&apos;.
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -816,74 +955,121 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
       {/* TAB 2: CLASSES */}
       {activeSection === 'classes' && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">Manage School Classes</h3>
-              <p className="text-xs text-slate-500">
-                Add, edit, or remove classes. Classes configured here dynamically appear in all dropdowns, student records, and reports.
-              </p>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Manage School Classes</h3>
+                <p className="text-xs text-slate-500">
+                  Configure classes, section arms (Default / No Section vs Arms A &amp; B), school fees, and assigned form teachers.
+                </p>
+              </div>
             </div>
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-              <input
-                type="text"
-                value={newClassName}
-                onChange={e => setNewClassName(e.target.value)}
-                placeholder="New class name, e.g. JSS Three"
-                className="text-xs border border-slate-300 rounded-lg px-3 py-2 w-48 sm:w-56 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                onKeyDown={e => e.key === 'Enter' && handleAddClass()}
-              />
-              {/* Quick Arms Selection for New Class */}
-              <div className="flex items-center space-x-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+
+            {/* Quick Add Class Ribbon */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5 pt-2 border-t border-slate-200/80 items-end">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Class Name
+                </label>
+                <input
+                  type="text"
+                  value={newClassName}
+                  onChange={e => setNewClassName(e.target.value)}
+                  placeholder="e.g. Primary Three"
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-blue-500 bg-white"
+                  onKeyDown={e => e.key === 'Enter' && handleAddClass()}
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Arms / Section Stream
+                </label>
+                <div className="flex items-center space-x-1 bg-slate-200/80 p-0.5 rounded-lg border border-slate-300">
+                  <button
+                    type="button"
+                    onClick={() => setNewClassSections([])}
+                    className={`flex-1 py-1 text-[11px] font-bold rounded transition ${
+                      newClassSections.length === 0
+                        ? 'bg-blue-900 text-white shadow-2xs'
+                        : 'text-slate-700 hover:text-slate-900'
+                    }`}
+                    title="Default: class with no section"
+                  >
+                    Default (No Section)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewClassSections(['A', 'B'])}
+                    className={`flex-1 py-1 text-[11px] font-bold rounded transition ${
+                      newClassSections.includes('A') && newClassSections.includes('B')
+                        ? 'bg-blue-900 text-white shadow-2xs'
+                        : 'text-slate-700 hover:text-slate-900'
+                    }`}
+                    title="Divided into Arms A and B"
+                  >
+                    Arms A &amp; B
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  School Fees (Next Term)
+                </label>
+                <input
+                  type="text"
+                  value={newClassFees}
+                  onChange={e => setNewClassFees(e.target.value)}
+                  placeholder="e.g. ₦ 16,000"
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-blue-500 bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                  Form Teacher Name
+                </label>
+                <input
+                  type="text"
+                  value={newClassTeacher}
+                  onChange={e => setNewClassTeacher(e.target.value)}
+                  placeholder="e.g. Ustaza Aisha Ardo"
+                  className="w-full text-xs border border-slate-300 rounded-lg p-2 focus:ring-1 focus:ring-blue-500 bg-white"
+                />
+              </div>
+
+              <div>
                 <button
                   type="button"
-                  onClick={() => setNewClassSections(['A'])}
-                  className={`px-2 py-1 text-[11px] font-bold rounded transition ${
-                    newClassSections.length === 1 && newClassSections[0] === 'A'
-                      ? 'bg-blue-900 text-white shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                  title="Class carries single arm (Section A only)"
+                  onClick={handleAddClass}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center space-x-1 shadow-xs"
                 >
-                  Single Arm (A)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewClassSections(['A', 'B'])}
-                  className={`px-2 py-1 text-[11px] font-bold rounded transition ${
-                    newClassSections.length === 2 && newClassSections.includes('A') && newClassSections.includes('B')
-                      ? 'bg-blue-900 text-white shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                  title="Class carries both Arms A and B"
-                >
-                  Arms A &amp; B
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Class</span>
                 </button>
               </div>
-              <button
-                onClick={handleAddClass}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1 shadow-xs"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Class</span>
-              </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-3">
+          {/* Class Cards Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-2">
             {classes.map((cls, idx) => {
               const classArms = getClassSections(cls, sections);
               const enrolledCount = db.students.filter(
                 s => s.className.toLowerCase().trim() === cls.name.toLowerCase().trim()
               ).length;
+              const feeAmount = cls.nextTermFees || schoolSettings.classFees?.[cls.name] || schoolSettings.defaultNextTermFees || '₦ 16,000';
+              const teacherName = cls.classTeacherName || 'Not assigned';
 
               return (
                 <div
                   key={cls.id}
-                  className="flex flex-col justify-between p-3.5 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white transition space-y-2.5 shadow-xs"
+                  className="flex flex-col justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition space-y-3 shadow-xs"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center space-x-2.5">
-                      <span className="w-6 h-6 rounded bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center flex-shrink-0">
+                      <span className="w-6 h-6 rounded bg-slate-100 text-slate-700 font-bold text-xs flex items-center justify-center flex-shrink-0 border border-slate-200">
                         {cls.order || idx + 1}
                       </span>
                       <div>
@@ -896,15 +1082,15 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                       </div>
                     </div>
 
-                    <div className="flex items-center space-x-1.5">
+                    <div className="flex items-center space-x-1">
                       <button
                         type="button"
                         onClick={() => handleStartEditClass(cls)}
                         className="px-2 py-1 text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 rounded-lg text-[11px] font-bold transition flex items-center space-x-1 border border-blue-200 shadow-2xs"
-                        title="Edit class name, sort order, and specific arms/sections"
+                        title="Edit class name, order, arms, fees, and teacher"
                       >
                         <Edit2 className="w-3 h-3" />
-                        <span>Edit Arms</span>
+                        <span>Edit</span>
                       </button>
                       <button
                         type="button"
@@ -917,26 +1103,117 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                     </div>
                   </div>
 
-                  {/* Section / Arms Pills */}
-                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs">
-                    <div className="flex items-center space-x-1 flex-wrap gap-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase mr-1">Arms:</span>
-                      {classArms.map(secName => (
-                        <span
-                          key={secName}
-                          className="px-2 py-0.5 rounded bg-blue-100 text-blue-900 text-[10px] font-bold border border-blue-200"
-                        >
-                          Section {secName}
+                  {/* Class Metadata: Arms, School Fees & Teacher */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100 text-xs">
+                    {/* Arms Status */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Stream:</span>
+                      {classArms.length === 0 ? (
+                        <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px] font-bold border border-slate-200">
+                          Default (No Section)
                         </span>
-                      ))}
+                      ) : (
+                        <div className="flex items-center space-x-1">
+                          {classArms.map(secName => (
+                            <span
+                              key={secName}
+                              className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-800 text-[10px] font-bold border border-blue-200"
+                            >
+                              Section {secName}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    {classArms.length === 1 && (
-                      <span className="text-[10px] text-slate-500 font-medium italic">Single Arm</span>
-                    )}
+
+                    {/* School Fees */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center space-x-1">
+                        <Coins className="w-3 h-3 text-amber-600" />
+                        <span>Term Fees:</span>
+                      </span>
+                      <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
+                        {feeAmount}
+                      </span>
+                    </div>
+
+                    {/* Form Teacher */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center space-x-1">
+                        <UserCheck className="w-3 h-3 text-slate-500" />
+                        <span>Teacher:</span>
+                      </span>
+                      <span className="font-medium text-slate-700 truncate max-w-[140px] text-[11px]" title={teacherName}>
+                        {teacherName}
+                      </span>
+                    </div>
                   </div>
                 </div>
               );
             })}
+          </div>
+
+          {/* Per-Class Fees & Assigned Teachers Overview Table */}
+          <div className="pt-4 border-t border-slate-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+                  Summary: Class Arms, Next Term Fees &amp; Form Teachers
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  These fee amounts and teacher names appear automatically on each student&apos;s generated report card.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-700 border-b border-slate-200 font-semibold uppercase text-[11px]">
+                  <tr>
+                    <th className="py-2.5 px-3 w-10">#</th>
+                    <th className="py-2.5 px-3">Class Name</th>
+                    <th className="py-2.5 px-3">Section Stream</th>
+                    <th className="py-2.5 px-3">Next Term Fees (Report)</th>
+                    <th className="py-2.5 px-3">Form Teacher (Report)</th>
+                    <th className="py-2.5 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {classes.map((c, idx) => {
+                    const arms = getClassSections(c, sections);
+                    const fee = c.nextTermFees || schoolSettings.classFees?.[c.name] || schoolSettings.defaultNextTermFees || '₦ 16,000';
+                    return (
+                      <tr key={c.id} className="hover:bg-slate-50/70 transition">
+                        <td className="py-2.5 px-3 text-slate-400 font-mono">{c.order || idx + 1}</td>
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{c.name}</td>
+                        <td className="py-2.5 px-3">
+                          {arms.length === 0 ? (
+                            <span className="inline-block px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-bold text-[10px] border border-slate-200">
+                              Default (No Section)
+                            </span>
+                          ) : (
+                            <span className="inline-block px-2 py-0.5 rounded-full bg-blue-50 text-blue-800 font-bold text-[10px] border border-blue-200">
+                              Arms {arms.join(', ')}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold text-emerald-800">{fee}</td>
+                        <td className="py-2.5 px-3 font-medium text-slate-700">{c.classTeacherName || '-'}</td>
+                        <td className="py-2.5 px-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditClass(c)}
+                            className="text-xs text-blue-700 hover:text-blue-900 font-bold hover:underline"
+                          >
+                            Edit Class
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* EDIT CLASS MODAL */}
@@ -1003,10 +1280,10 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                       <div className="flex items-center space-x-1.5">
                         <button
                           type="button"
-                          onClick={() => setEditClassSections(['A'])}
+                          onClick={() => setEditClassSections([])}
                           className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold transition"
                         >
-                          Single Arm (A only)
+                          No Section (Just Class)
                         </button>
                         <button
                           type="button"
@@ -1066,6 +1343,43 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                       </button>
                     </div>
                   </div>
+
+                  {/* Next Term School Fees for this class */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          Next Term School Fees *
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={editClassFees}
+                            onChange={e => setEditClassFees(e.target.value)}
+                            placeholder="e.g. ₦ 16,000"
+                            className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          />
+                        </div>
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                          Appears on this class&apos;s report cards under &apos;NEXT TERM SCHOOL FEES&apos;.
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                          Assigned Form / Class Teacher
+                        </label>
+                        <input
+                          type="text"
+                          value={editClassTeacher}
+                          onChange={e => setEditClassTeacher(e.target.value)}
+                          placeholder="e.g. Ustaza Aisha Muhammad Ardo"
+                          className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                          Appears on this class&apos;s report cards under &apos;FORM TEACHER&apos;S NAME&apos;.
+                        </span>
+                      </div>
+                    </div>
 
                   {/* Data Preservation Warning */}
                   <div className="p-3 bg-blue-50 border border-blue-100 rounded-xl text-blue-900 text-xs flex items-center space-x-2">

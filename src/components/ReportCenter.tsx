@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppDatabase, Student, AssessmentRecord, UserAccount } from '../types';
 import { computeClassStatistics, rankAssessments } from '../utils/ranking';
-import { getSectionsForClass } from '../utils/classSections';
+import { getSectionsForClass, formatClassWithSection } from '../utils/classSections';
 import { ReportSheet } from './ReportSheet';
 import {
   FileText,
@@ -47,21 +47,29 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     isTeacher && teacherClass ? teacherClass : (db.classes[0]?.name || 'Nursery One')
   );
 
-  // Applicable arms/sections for selected class (not all classes have A and B)
+  // Applicable arms/sections for selected class (classes without A and B have NO section)
   const classSections = useMemo(() => {
     return getSectionsForClass(selectedClass, db.classes, db.sections);
   }, [selectedClass, db.classes, db.sections]);
 
+  const hasSections = classSections.length > 0;
+
   const [selectedSection, setSelectedSection] = useState<string>(
-    isTeacher && teacherSection ? teacherSection : (db.sections[0]?.name || 'A')
+    hasSections
+      ? (isTeacher && teacherSection ? teacherSection : (classSections[0] || 'A'))
+      : ''
   );
 
   // Synchronize section if current selection is not valid for this class
   useEffect(() => {
-    if (classSections.length > 0 && !classSections.includes(selectedSection)) {
-      setSelectedSection(classSections[0]);
+    if (hasSections) {
+      if (!classSections.includes(selectedSection)) {
+        setSelectedSection(classSections[0] || 'A');
+      }
+    } else {
+      setSelectedSection('');
     }
-  }, [selectedClass, classSections, selectedSection]);
+  }, [selectedClass, classSections, selectedSection, hasSections]);
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
     initialStudentId || 'ALL'
@@ -91,9 +99,13 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
   };
 
   // Get eligible students for the current single-class filter
-  const singleClassStudents = db.students.filter(
-    s => s.className === selectedClass && s.section === selectedSection && s.status === 'Active'
-  );
+  const singleClassStudents = db.students.filter(s => {
+    if (s.className !== selectedClass || s.status !== 'Active') return false;
+    if (hasSections) {
+      return s.section === selectedSection;
+    }
+    return true; // Classes without A and B have NO section
+  });
 
   // Collect reports to generate
   let reportsToGenerate: Array<{
@@ -103,14 +115,14 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
   }> = [];
 
   if (generationMode === 'single-class') {
-    // Rank all assessments for this specific class and section
-    const rawClassAssessments = db.assessments.filter(
-      a =>
-        a.className === selectedClass &&
-        a.section === selectedSection &&
-        a.academicSession === session &&
-        a.term === term
-    );
+    // Rank all assessments for this specific class (and section if applicable)
+    const rawClassAssessments = db.assessments.filter(a => {
+      if (a.className !== selectedClass || a.academicSession !== session || a.term !== term) return false;
+      if (hasSections) {
+        return a.section === selectedSection;
+      }
+      return true;
+    });
     const rankedClassAssessments = rankAssessments(rawClassAssessments);
     const classStats = computeClassStatistics(rankedClassAssessments);
 
@@ -320,8 +332,12 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                     const newCls = e.target.value;
                     setSelectedClass(newCls);
                     const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
-                    if (!validSecs.includes(selectedSection)) {
-                      setSelectedSection(validSecs[0] || 'A');
+                    if (validSecs.length > 0) {
+                      if (!validSecs.includes(selectedSection)) {
+                        setSelectedSection(validSecs[0] || 'A');
+                      }
+                    } else {
+                      setSelectedSection('');
                     }
                   }}
                   className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
@@ -339,7 +355,11 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                 {isTeacher && teacherSection ? 'Section (Locked)' : 'Section'}
               </label>
-              {isTeacher && teacherSection ? (
+              {!hasSections ? (
+                <div className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-slate-100 text-slate-500 italic flex items-center justify-between">
+                  <span>No Section (Single Stream)</span>
+                </div>
+              ) : isTeacher && teacherSection ? (
                 <div className="w-full text-xs font-bold border border-amber-300 rounded-lg p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
                   <span>Section {selectedSection}</span>
                   <Lock className="w-3.5 h-3.5 text-amber-600" />
@@ -470,7 +490,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                 Report {idx + 1} of {reportsToRender.length}:{' '}
                 <strong className="text-slate-900 font-bold">{item.student.name}</strong>{' '}
                 <span className="text-slate-500">
-                  ({item.student.className}{item.student.section ? ` - ${item.student.section}` : ''})
+                  ({formatClassWithSection(item.student.className, item.student.section, db.classes)})
                 </span>
               </span>
               <div className="flex items-center space-x-2">
@@ -505,6 +525,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
               stats={item.stats}
               gradingBoundaries={db.gradingBoundaries}
               psychomotorItems={db.psychomotorItems}
+              classes={db.classes}
             />
           </div>
         ))}
@@ -553,6 +574,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                     stats={item.stats}
                     gradingBoundaries={db.gradingBoundaries}
                     psychomotorItems={db.psychomotorItems}
+                    classes={db.classes}
                   />
                 </div>
               ))}

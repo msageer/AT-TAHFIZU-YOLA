@@ -49,21 +49,27 @@ export const ClassSummary: React.FC<ClassSummaryProps> = ({
     return getSectionsForClass(selectedClass, db.classes, db.sections);
   }, [selectedClass, db.classes, db.sections]);
 
+  const hasSections = classSections.length > 0;
+
   // Synchronize section if current selection is not valid for this class
   useEffect(() => {
-    if (classSections.length > 0 && !classSections.includes(selectedSection)) {
-      setSelectedSection(classSections[0]);
+    if (hasSections) {
+      if (!classSections.includes(selectedSection)) {
+        setSelectedSection(classSections[0] || 'A');
+      }
+    } else {
+      setSelectedSection('');
     }
-  }, [selectedClass, classSections, selectedSection]);
+  }, [selectedClass, classSections, selectedSection, hasSections]);
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  // Filter assessments for this class and section
+  // Filter assessments for this class (and section if class has sections)
   const classAssessments = db.assessments
     .filter(
       a =>
         a.className === selectedClass &&
-        a.section === selectedSection &&
+        (!hasSections || a.section === selectedSection) &&
         a.academicSession === selectedSession &&
         a.term === selectedTerm
     )
@@ -212,7 +218,11 @@ export const ClassSummary: React.FC<ClassSummaryProps> = ({
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
               {isTeacher && teacherSection ? 'Section (Locked)' : 'Section'}
             </label>
-            {isTeacher && teacherSection ? (
+            {!hasSections ? (
+              <div className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-slate-100 text-slate-500 italic flex items-center justify-between">
+                <span>No Section (Single Stream)</span>
+              </div>
+            ) : isTeacher && teacherSection ? (
               <div className="w-full text-xs font-bold border border-amber-300 rounded-lg p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
                 <span>Section {selectedSection}</span>
                 <Lock className="w-3.5 h-3.5 text-amber-600" />
