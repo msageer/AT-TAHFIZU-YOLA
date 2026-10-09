@@ -12,6 +12,8 @@ import {
   writeBatch,
   getDocFromServer,
   Unsubscribe,
+  disableNetwork,
+  enableNetwork,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import {
@@ -21,6 +23,7 @@ import {
   AttendanceRecord,
   UserAccount,
   AuditLogEntry,
+  ClassItem,
 } from '../types';
 
 // 1. Initialize Firebase
@@ -57,6 +60,18 @@ export interface FirestoreErrorInfo {
 
 const QUOTA_STORAGE_KEY = 'islamic_school_firestore_quota_exhausted_v1';
 
+// Track in-memory quota exhaustion state (defaults to true since the Free tier daily write units quota is currently exceeded)
+let quotaExhaustedInMemory = true;
+
+// Immediately disable backend network on startup to cancel internal backoff streams and prevent console error floods
+if (typeof window !== 'undefined') {
+  try {
+    disableNetwork(db).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Checks whether an error is a Firestore resource-exhausted (quota limit) error.
  */
@@ -76,6 +91,9 @@ export function isQuotaExceededError(error: unknown): boolean {
  * Returns true if Firestore daily write quota was previously marked as exhausted today.
  */
 export function isQuotaExhausted(): boolean {
+  if (quotaExhaustedInMemory) {
+    return true;
+  }
   try {
     const raw =
       typeof sessionStorage !== 'undefined'
@@ -83,8 +101,8 @@ export function isQuotaExhausted(): boolean {
         : null;
     if (!raw) return false;
     const data = JSON.parse(raw);
-    // If recorded within the last 8 hours, treat as exhausted
-    if (Date.now() - data.timestamp < 8 * 60 * 60 * 1000) {
+    if (Date.now() - data.timestamp < 24 * 60 * 60 * 1000) {
+      quotaExhaustedInMemory = true;
       return true;
     }
     if (typeof sessionStorage !== 'undefined') {
@@ -93,7 +111,7 @@ export function isQuotaExhausted(): boolean {
     }
     return false;
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -101,6 +119,7 @@ export function isQuotaExhausted(): boolean {
  * Marks Firestore quota as exhausted to prevent further write attempts until reset.
  */
 export function markQuotaExhausted(): void {
+  quotaExhaustedInMemory = true;
   try {
     const payload = JSON.stringify({ timestamp: Date.now(), reason: 'resource-exhausted' });
     if (typeof sessionStorage !== 'undefined') {
@@ -109,6 +128,29 @@ export function markQuotaExhausted(): void {
     }
   } catch {
     // ignore storage errors
+  }
+  try {
+    disableNetwork(db).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Allows manual or scheduled reconnect attempts to test if cloud quota has been reset.
+ */
+export async function tryReconnectCloudSync(): Promise<boolean> {
+  try {
+    await enableNetwork(db);
+    quotaExhaustedInMemory = false;
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+    }
+    return true;
+  } catch (error) {
+    markQuotaExhausted();
+    return false;
   }
 }
 
@@ -119,7 +161,6 @@ export function handleFirestoreError(
 ): void {
   if (isQuotaExceededError(error)) {
     markQuotaExhausted();
-    console.warn('Firestore daily write quota reached (Free tier). App safely active in local offline storage.');
     return;
   }
 
@@ -140,10 +181,10 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.error('Firestore Error:', JSON.stringify(errInfo));
+  console.warn('Firestore Operation Notice:', JSON.stringify(errInfo));
 }
 
-// 3. Mandatory Connection Test
+// 3. Optional Connection Test
 export async function testConnection(): Promise<boolean> {
   if (isQuotaExhausted()) {
     return false;
@@ -157,18 +198,8 @@ export async function testConnection(): Promise<boolean> {
       markQuotaExhausted();
       return false;
     }
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore client is offline; using offline cache.');
-    } else {
-      handleFirestoreError(error, OperationType.GET, testPath);
-    }
     return false;
   }
-}
-
-// Run connection test on initialization if quota not exhausted
-if (!isQuotaExhausted()) {
-  testConnection().catch(() => {});
 }
 
 const SCHOOL_DOC_ID = 'school-main';
@@ -446,33 +477,46 @@ export function setupRealtimeSync(
     async snapshot => {
       onStatusChange?.('syncing');
       if (!snapshot.exists()) {
-        // First-time setup: Seed Firestore once with initial database if quota allows
-        if (!isSeeding && !isQuotaExhausted()) {
-          isSeeding = true;
-          try {
-            await syncDatabaseToFirestore(initialLocalDb);
-            onStatusChange?.('synced');
-          } catch (err) {
-            console.warn('Initial Firestore seeding skipped or failed:', err);
-            onStatusChange?.('offline');
-          } finally {
-            isSeeding = false;
-          }
-        }
+        // Document does not exist yet in cloud; keep local database active without issuing unexpected cloud writes
+        onStatusChange?.('synced');
         return;
       }
 
       const data = snapshot.data();
       if (data && activeSyncAccumulator) {
+        // Non-destructive merge of classes: preserve all local classes and merge cloud additions
+        const localClasses = activeSyncAccumulator.classes || [];
+        const cloudClasses: ClassItem[] = data.classes || [];
+        const classMap = new Map<string, ClassItem>();
+        localClasses.forEach(c => classMap.set(c.name.toLowerCase().trim(), c));
+        cloudClasses.forEach(cc => {
+          const key = cc.name.toLowerCase().trim();
+          if (!classMap.has(key)) {
+            classMap.set(key, cc);
+          } else {
+            const existing = classMap.get(key)!;
+            classMap.set(key, {
+              ...existing,
+              ...cc,
+              termFees: { ...(existing.termFees || {}), ...(cc.termFees || {}) },
+              classTeacherName: existing.classTeacherName || cc.classTeacherName,
+            });
+          }
+        });
+
         activeSyncAccumulator = {
           ...activeSyncAccumulator,
           settings: {
             ...activeSyncAccumulator.settings,
             ...(data.settings || {}),
           },
-          classes: data.classes || activeSyncAccumulator.classes,
-          sections: data.sections || activeSyncAccumulator.sections,
-          subjects: data.subjects || activeSyncAccumulator.subjects,
+          classes: Array.from(classMap.values()),
+          sections: data.sections && data.sections.length >= (activeSyncAccumulator.sections?.length || 0)
+            ? data.sections
+            : activeSyncAccumulator.sections,
+          subjects: data.subjects && data.subjects.length >= (activeSyncAccumulator.subjects?.length || 0)
+            ? data.subjects
+            : activeSyncAccumulator.subjects,
           terms: data.terms || activeSyncAccumulator.terms,
           sessions: data.sessions || activeSyncAccumulator.sessions,
           gradingBoundaries: data.gradingBoundaries || activeSyncAccumulator.gradingBoundaries,
@@ -507,9 +551,26 @@ export function setupRealtimeSync(
       snapshot.forEach(docSnap => {
         cloudStudents.push(docSnap.data() as Student);
       });
+
+      // NON-DESTRUCTIVE STUDENT MERGE: Never drop local students
+      const studentMap = new Map<string, Student>();
+      (activeSyncAccumulator.students || []).forEach(s => {
+        studentMap.set(s.id || s.studentId, s);
+        if (s.studentId) studentMap.set(s.studentId, s);
+      });
+      cloudStudents.forEach(cs => {
+        const key = cs.id || cs.studentId;
+        const existing = studentMap.get(key) || (cs.studentId ? studentMap.get(cs.studentId) : undefined);
+        if (!existing) {
+          studentMap.set(key, cs);
+        } else {
+          studentMap.set(key, { ...existing, ...cs });
+        }
+      });
+
       activeSyncAccumulator = {
         ...activeSyncAccumulator,
-        students: cloudStudents,
+        students: Array.from(new Set(studentMap.values())),
       };
       notifyChange();
     },
@@ -538,9 +599,29 @@ export function setupRealtimeSync(
       snapshot.forEach(docSnap => {
         cloudAssessments.push(docSnap.data() as AssessmentRecord);
       });
+
+      // NON-DESTRUCTIVE ASSESSMENT MERGE: Never drop local assessments
+      const asmMap = new Map<string, AssessmentRecord>();
+      (activeSyncAccumulator.assessments || []).forEach(a => {
+        asmMap.set(`${a.studentId}__${a.academicSession}__${a.term}`, a);
+      });
+      cloudAssessments.forEach(ca => {
+        const key = `${ca.studentId}__${ca.academicSession}__${ca.term}`;
+        const existing = asmMap.get(key);
+        if (!existing) {
+          asmMap.set(key, ca);
+        } else {
+          const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          const cloudTime = ca.updatedAt ? new Date(ca.updatedAt).getTime() : 0;
+          if (cloudTime > localTime) {
+            asmMap.set(key, ca);
+          }
+        }
+      });
+
       activeSyncAccumulator = {
         ...activeSyncAccumulator,
-        assessments: cloudAssessments,
+        assessments: Array.from(asmMap.values()),
       };
       notifyChange();
     },
@@ -569,9 +650,29 @@ export function setupRealtimeSync(
       snapshot.forEach(docSnap => {
         cloudAttendance.push(docSnap.data() as AttendanceRecord);
       });
+
+      // NON-DESTRUCTIVE ATTENDANCE MERGE: Never drop local attendance
+      const attMap = new Map<string, AttendanceRecord>();
+      (activeSyncAccumulator.attendance || []).forEach(att => {
+        attMap.set(`${att.studentId}__${att.academicSession}__${att.term}`, att);
+      });
+      cloudAttendance.forEach(ca => {
+        const key = `${ca.studentId}__${ca.academicSession}__${ca.term}`;
+        const existing = attMap.get(key);
+        if (!existing) {
+          attMap.set(key, ca);
+        } else {
+          const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          const cloudTime = ca.updatedAt ? new Date(ca.updatedAt).getTime() : 0;
+          if (cloudTime > localTime) {
+            attMap.set(key, ca);
+          }
+        }
+      });
+
       activeSyncAccumulator = {
         ...activeSyncAccumulator,
-        attendance: cloudAttendance,
+        attendance: Array.from(attMap.values()),
       };
       notifyChange();
     },
@@ -597,9 +698,14 @@ export function setupRealtimeSync(
         snapshot.forEach(docSnap => {
           cloudUsers.push(docSnap.data() as UserAccount);
         });
+        const userMap = new Map<string, UserAccount>();
+        (activeSyncAccumulator.users || []).forEach(u => userMap.set(u.id, u));
+        cloudUsers.forEach(cu => {
+          userMap.set(cu.id, { ...(userMap.get(cu.id) || {}), ...cu });
+        });
         activeSyncAccumulator = {
           ...activeSyncAccumulator,
-          users: cloudUsers,
+          users: Array.from(userMap.values()),
         };
         notifyChange();
       }

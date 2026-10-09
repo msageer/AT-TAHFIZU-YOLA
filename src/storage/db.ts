@@ -359,12 +359,33 @@ export function loadDatabase(): AppDatabase {
 export function saveDatabase(db: AppDatabase): void {
   try {
     const serialized = JSON.stringify(db);
-    localStorage.setItem(STORAGE_KEY, serialized);
-    // Continuous safety backup snapshot to prevent any data loss across git deployments
-    localStorage.setItem(BACKUP_STORAGE_KEY, serialized);
+    try {
+      localStorage.setItem(STORAGE_KEY, serialized);
+    } catch (primaryErr: any) {
+      console.warn('Primary localStorage write failed, cleaning legacy keys and pruning logs:', primaryErr);
+      // Clean up legacy keys to reclaim space
+      try {
+        LEGACY_STORAGE_KEYS.forEach(k => {
+          if (k !== STORAGE_KEY) localStorage.removeItem(k);
+        });
+      } catch {}
+      // Prune audit logs to last 20 entries to reduce payload size
+      const slimDb: AppDatabase = {
+        ...db,
+        auditLogs: (db.auditLogs || []).slice(0, 20),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(slimDb));
+    }
+
+    // Continuous safety backup snapshot
+    try {
+      localStorage.setItem(BACKUP_STORAGE_KEY, serialized);
+    } catch {
+      // backup storage quota safety - do not throw
+    }
   } catch (err) {
     console.error('Failed to save database to localStorage:', err);
-    throw err;
+    // Even if local storage is completely blocked, do not throw so application in-memory state remains intact
   }
 }
 

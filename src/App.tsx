@@ -91,27 +91,31 @@ export default function App() {
       // 1. Immediately update cloud sync accumulator so incoming snapshots don't lag
       setSyncDbSnapshot(newDb);
 
-      // 2. Persist locally to storage (throws if storage quota is exceeded or storage is blocked)
+      // 2. Persist locally to storage
       saveDatabase(newDb);
 
       // 3. Commit state into React
       setDb(newDb);
 
       // 4. Multi-device cloud sync with error catching
-      syncDatabaseToFirestore(newDb)
-        .then(() => {
-          if (isQuotaExhausted()) {
+      if (isQuotaExhausted()) {
+        setCloudSyncStatus('offline');
+      } else {
+        syncDatabaseToFirestore(newDb)
+          .then(() => {
+            if (isQuotaExhausted()) {
+              setCloudSyncStatus('offline');
+            } else {
+              setCloudSyncStatus('synced');
+            }
+          })
+          .catch(err => {
             setCloudSyncStatus('offline');
-          } else {
-            setCloudSyncStatus('synced');
-          }
-        })
-        .catch(err => {
-          setCloudSyncStatus('offline');
-          if (!isQuotaExceededError(err)) {
-            console.warn('Multi-device cloud sync offline:', err);
-          }
-        });
+            if (!isQuotaExceededError(err)) {
+              console.warn('Multi-device cloud sync offline:', err);
+            }
+          });
+      }
 
       // 5. User-facing success feedback
       setDbNotification({
@@ -394,24 +398,23 @@ export default function App() {
     }
 
     // 2. Re-rank all students in this class/section/session/term
+    const cleanClassName = (record.className || '').toLowerCase().trim();
+    const cleanSection = (record.section || '').toUpperCase().trim();
     const classGroup = list.filter(
       a =>
-        a.className === record.className &&
-        a.section === record.section &&
+        (a.className || '').toLowerCase().trim() === cleanClassName &&
+        (a.section || '').toUpperCase().trim() === cleanSection &&
         a.academicSession === record.academicSession &&
         a.term === record.term
     );
     const rankedClassGroup = rankAssessments(classGroup);
 
-    // 3. Merge back into full assessments array
+    // 3. Merge back into full assessments array - exclude only records replaced in rankedClassGroup
+    const rankedKeys = new Set(
+      rankedClassGroup.map(r => `${r.studentId}__${r.academicSession}__${r.term}`)
+    );
     const otherRecords = list.filter(
-      a =>
-        !(
-          a.className === record.className &&
-          a.section === record.section &&
-          a.academicSession === record.academicSession &&
-          a.term === record.term
-        )
+      a => !rankedKeys.has(`${a.studentId}__${a.academicSession}__${a.term}`)
     );
 
     const mergedAssessments = [...otherRecords, ...rankedClassGroup];

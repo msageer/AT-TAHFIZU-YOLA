@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   SchoolSettings,
   ClassItem,
@@ -96,6 +96,15 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   const [selectedTermSettingsTab, setSelectedTermSettingsTab] = useState<'1st Term' | '2nd Term' | '3rd Term'>(
     (db.settings.currentTerm as any) || '1st Term'
   );
+
+  // Synchronize internal state whenever db changes externally to prevent stale overwrites
+  useEffect(() => {
+    setClasses([...db.classes]);
+    setSections([...db.sections]);
+    setSubjects([...db.subjects]);
+    setGradingBoundaries([...db.gradingBoundaries]);
+    setPsychomotorItems([...db.psychomotorItems]);
+  }, [db.classes, db.sections, db.subjects, db.gradingBoundaries, db.psychomotorItems]);
 
   // Available teachers (from db.users with role teacher or staff, plus any assigned form teachers)
   const availableTeachers = useMemo(() => {
@@ -238,7 +247,17 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     const updated = classes.map(c =>
       c.id === classId ? { ...c, classTeacherName: teacherName } : c
     );
+    const targetClass = classes.find(c => c.id === classId);
     setClasses(updated);
+    onUpdateDb({
+      ...db,
+      classes: updated,
+    });
+    showNotification(
+      teacherName
+        ? `Assigned ${teacherName} as form teacher for ${targetClass?.name || 'class'}`
+        : `Cleared form teacher for ${targetClass?.name || 'class'}`
+    );
   };
 
   // Notifications
