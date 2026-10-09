@@ -25,6 +25,7 @@ import {
   AuditLogEntry,
   ClassItem,
 } from '../types';
+import { deduplicateStudents } from '../utils/studentDeduplication';
 
 // 1. Initialize Firebase
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -377,6 +378,35 @@ export async function deleteStudentFromFirestore(
 }
 
 /**
+ * Permanently removes multiple students from Firestore in batches.
+ */
+export async function deleteStudentsBatchFromFirestore(
+  studentDocIds: string[]
+): Promise<void> {
+  if (isQuotaExhausted() || !studentDocIds || studentDocIds.length === 0) {
+    return;
+  }
+  try {
+    const uniqueIds = Array.from(new Set(studentDocIds.filter(Boolean)));
+    for (let i = 0; i < uniqueIds.length; i += 400) {
+      const chunk = uniqueIds.slice(i, i + 400);
+      const batch = writeBatch(db);
+      chunk.forEach(rawId => {
+        const studentRef = doc(db, 'schools', SCHOOL_DOC_ID, 'students', toSafeDocId(rawId));
+        batch.delete(studentRef);
+      });
+      await batch.commit();
+    }
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      markQuotaExhausted();
+      return;
+    }
+    console.warn('Batch delete students from cloud notice:', error);
+  }
+}
+
+/**
  * Permanently removes an assessment from Firestore.
  */
 export async function deleteAssessmentFromFirestore(assessmentId: string): Promise<void> {
@@ -527,25 +557,13 @@ export function setupRealtimeSync(
         cloudStudents.push(docSnap.data() as Student);
       });
 
-      // NON-DESTRUCTIVE STUDENT MERGE: Never drop local students
-      const studentMap = new Map<string, Student>();
-      (activeSyncAccumulator.students || []).forEach(s => {
-        studentMap.set(s.id || s.studentId, s);
-        if (s.studentId) studentMap.set(s.studentId, s);
-      });
-      cloudStudents.forEach(cs => {
-        const key = cs.id || cs.studentId;
-        const existing = studentMap.get(key) || (cs.studentId ? studentMap.get(cs.studentId) : undefined);
-        if (!existing) {
-          studentMap.set(key, cs);
-        } else {
-          studentMap.set(key, { ...existing, ...cs });
-        }
-      });
+      // MERGE & CANONICAL DEDUPLICATION: Unify local and cloud students so duplicates are overridden into one record
+      const combined = [...(activeSyncAccumulator.students || []), ...cloudStudents];
+      const { deduplicatedStudents } = deduplicateStudents(combined);
 
       activeSyncAccumulator = {
         ...activeSyncAccumulator,
-        students: Array.from(new Set(studentMap.values())),
+        students: deduplicatedStudents,
       };
       notifyChange();
     },
