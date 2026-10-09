@@ -249,10 +249,20 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     showNotification(`Applied ${feeToApply} to all classes in ${selectedTermSettingsTab}`);
   };
 
-  const handleUpdateClassTeacherDirect = (classId: string, teacherName: string) => {
-    const updated = classes.map(c =>
-      c.id === classId ? { ...c, classTeacherName: teacherName } : c
-    );
+  const handleUpdateClassTeacherDirect = (classId: string, teacherName: string, sectionName?: string) => {
+    const updated = classes.map(c => {
+      if (c.id !== classId) return c;
+      if (sectionName) {
+        return {
+          ...c,
+          sectionTeachers: {
+            ...(c.sectionTeachers || {}),
+            [sectionName]: teacherName,
+          },
+        };
+      }
+      return { ...c, classTeacherName: teacherName };
+    });
     const targetClass = classes.find(c => c.id === classId);
     setClasses(updated);
     onUpdateDb({
@@ -261,8 +271,8 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     });
     showNotification(
       teacherName
-        ? `Assigned ${teacherName} as form teacher for ${targetClass?.name || 'class'}`
-        : `Cleared form teacher for ${targetClass?.name || 'class'}`
+        ? `Assigned ${teacherName} as form master for ${targetClass?.name || 'class'}${sectionName ? ` (Arm ${sectionName})` : ''}`
+        : `Cleared form master for ${targetClass?.name || 'class'}${sectionName ? ` (Arm ${sectionName})` : ''}`
     );
   };
 
@@ -358,6 +368,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   const [editClassSections, setEditClassSections] = useState<string[]>([]);
   const [editClassFees, setEditClassFees] = useState('₦ 16,000');
   const [editClassTeacher, setEditClassTeacher] = useState('');
+  const [editClassSectionTeachers, setEditClassSectionTeachers] = useState<Record<string, string>>({});
   const [editClassTermFees, setEditClassTermFees] = useState<Record<string, string>>({
     '1st Term': '₦ 16,000',
     '2nd Term': '₦ 16,000',
@@ -375,6 +386,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
     setEditClassSections(configuredSections);
     setEditClassFees(cls.nextTermFees || schoolSettings.classFees?.[cls.name] || schoolSettings.defaultNextTermFees || '₦ 16,000');
     setEditClassTeacher(cls.classTeacherName || '');
+    setEditClassSectionTeachers(cls.sectionTeachers || {});
     setEditClassTermFees({
       '1st Term': cls.termFees?.['1st Term'] || schoolSettings.termSettings?.['1st Term']?.classFees?.[cls.name] || cls.nextTermFees || '₦ 16,000',
       '2nd Term': cls.termFees?.['2nd Term'] || schoolSettings.termSettings?.['2nd Term']?.classFees?.[cls.name] || cls.nextTermFees || '₦ 16,000',
@@ -425,7 +437,8 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
         editClassOrder,
         editClassFees.trim() || '₦ 16,000',
         editClassTeacher.trim(),
-        editClassTermFees
+        editClassTermFees,
+        editClassSectionTeachers
       );
       // Synchronize class fees into settings.classFees and settings.termSettings
       const updatedClassFees: Record<string, string> = {
@@ -1189,26 +1202,51 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                     Assign the class form teacher for each class. Report sheets automatically display the assigned teacher&apos;s name and signature line for each student in that class.
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                    {classes.map(cls => (
-                      <div key={cls.id} className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-slate-900">{cls.name}</span>
-                          <span className="text-[10px] text-slate-400 font-medium">Form Teacher</span>
+                    {classes.flatMap(cls => {
+                      const classArms = getClassSections(cls, sections);
+                      if (classArms.length > 0) {
+                        return classArms.map(arm => (
+                          <div key={`${cls.id}-${arm}`} className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-900">{cls.name} <span className="text-blue-700 font-extrabold">(Arm {arm})</span></span>
+                              <span className="text-[10px] text-blue-700 font-bold bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">Arm {arm} Master</span>
+                            </div>
+                            <select
+                              value={cls.sectionTeachers?.[arm] || cls.classTeacherName || ''}
+                              onChange={e => handleUpdateClassTeacherDirect(cls.id, e.target.value, arm)}
+                              className="w-full text-xs font-semibold border border-slate-300 rounded p-1.5 focus:ring-1 focus:ring-blue-500 bg-white"
+                            >
+                              <option value="">-- Select Arm {arm} Form Master --</option>
+                              {availableTeachers.map(t => (
+                                <option key={t.id} value={t.name}>
+                                  {t.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ));
+                      }
+                      return [
+                        <div key={cls.id} className="bg-white p-2.5 rounded-lg border border-slate-200 shadow-2xs space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-900">{cls.name}</span>
+                            <span className="text-[10px] text-slate-400 font-medium">Form Teacher</span>
+                          </div>
+                          <select
+                            value={cls.classTeacherName || ''}
+                            onChange={e => handleUpdateClassTeacherDirect(cls.id, e.target.value)}
+                            className="w-full text-xs font-semibold border border-slate-300 rounded p-1.5 focus:ring-1 focus:ring-blue-500 bg-white"
+                          >
+                            <option value="">-- Select Teacher --</option>
+                            {availableTeachers.map(t => (
+                              <option key={t.id} value={t.name}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                        <select
-                          value={cls.classTeacherName || ''}
-                          onChange={e => handleUpdateClassTeacherDirect(cls.id, e.target.value)}
-                          className="w-full text-xs font-semibold border border-slate-300 rounded p-1.5 focus:ring-1 focus:ring-blue-500 bg-white"
-                        >
-                          <option value="">-- Select Teacher --</option>
-                          {availableTeachers.map(t => (
-                            <option key={t.id} value={t.name}>
-                              {t.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    ))}
+                      ];
+                    })}
                   </div>
                 </div>
 
@@ -1569,14 +1607,30 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                     </div>
 
                     {/* Form Teacher */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center space-x-1">
-                        <UserCheck className="w-3 h-3 text-slate-500" />
-                        <span>Teacher:</span>
-                      </span>
-                      <span className="font-medium text-slate-700 truncate max-w-[140px] text-[11px]" title={teacherName}>
-                        {teacherName}
-                      </span>
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase flex items-center space-x-1">
+                          <UserCheck className="w-3 h-3 text-slate-500" />
+                          <span>Form Master:</span>
+                        </span>
+                        {classArms.length === 0 && (
+                          <span className="font-medium text-slate-700 truncate max-w-[140px] text-[11px]" title={teacherName}>
+                            {teacherName}
+                          </span>
+                        )}
+                      </div>
+                      {classArms.length > 0 && (
+                        <div className="space-y-1 pt-1 border-t border-slate-100 text-[11px]">
+                          {classArms.map(arm => (
+                            <div key={arm} className="flex items-center justify-between text-slate-700">
+                              <span className="font-bold text-blue-900 text-[10px]">Arm {arm}:</span>
+                              <span className="truncate max-w-[150px] font-medium" title={cls.sectionTeachers?.[arm] || cls.classTeacherName || 'Not assigned'}>
+                                {cls.sectionTeachers?.[arm] || cls.classTeacherName || 'Not assigned'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1635,7 +1689,19 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                         <td className="py-2.5 px-3 font-semibold text-emerald-800">{fee1}</td>
                         <td className="py-2.5 px-3 font-semibold text-emerald-800">{fee2}</td>
                         <td className="py-2.5 px-3 font-semibold text-emerald-800">{fee3}</td>
-                        <td className="py-2.5 px-3 font-medium text-slate-700">{c.classTeacherName || '-'}</td>
+                        <td className="py-2.5 px-3 font-medium text-slate-700">
+                          {arms.length > 0 && c.sectionTeachers && Object.keys(c.sectionTeachers).length > 0 ? (
+                            <div className="space-y-0.5 text-[11px]">
+                              {arms.map(arm => (
+                                <div key={arm} className="whitespace-nowrap">
+                                  <span className="font-bold text-blue-900">Arm {arm}:</span> {c.sectionTeachers?.[arm] || c.classTeacherName || '-'}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            c.classTeacherName || '-'
+                          )}
+                        </td>
                         <td className="py-2.5 px-3 text-right">
                           <button
                             type="button"
@@ -1783,9 +1849,62 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
 
                   {/* Assigned Teacher & Next Term School Fees for this class */}
                   <div className="space-y-3 pt-2 border-t border-slate-100">
+                    {editClassSections.length > 0 && (
+                      <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl space-y-2.5">
+                        <div>
+                          <label className="block text-xs font-bold text-blue-950 uppercase">
+                            Arm Form Masters (Different Form Master for Each Arm)
+                          </label>
+                          <span className="text-[11px] text-blue-800">
+                            Each arm (e.g. Arm A and Arm B) has its own distinct Form Master for reports &amp; broadsheets.
+                          </span>
+                        </div>
+                        <div className="space-y-2">
+                          {editClassSections.map(arm => (
+                            <div key={arm} className="bg-white p-2 rounded-lg border border-blue-200 flex flex-col sm:flex-row sm:items-center gap-2">
+                              <span className="font-bold text-xs text-blue-900 w-24">
+                                Arm {arm} Master:
+                              </span>
+                              <select
+                                value={editClassSectionTeachers[arm] || ''}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setEditClassSectionTeachers(prev => ({
+                                    ...prev,
+                                    [arm]: val,
+                                  }));
+                                }}
+                                className="flex-1 text-xs font-semibold border border-slate-300 rounded p-1.5 focus:ring-1 focus:ring-blue-500 bg-white"
+                              >
+                                <option value="">-- Select Arm {arm} Form Master --</option>
+                                {availableTeachers.map(t => (
+                                  <option key={t.id} value={t.name}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="text"
+                                value={editClassSectionTeachers[arm] || ''}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setEditClassSectionTeachers(prev => ({
+                                    ...prev,
+                                    [arm]: val,
+                                  }));
+                                }}
+                                placeholder="Or type name"
+                                className="sm:w-40 text-xs border border-slate-300 rounded p-1.5 focus:ring-1 focus:ring-blue-500 bg-white"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                        Assigned Form / Class Teacher
+                        {editClassSections.length > 0 ? 'General / Fallback Form Teacher' : 'Assigned Form / Class Teacher'}
                       </label>
                       <div className="flex items-center space-x-2">
                         <select
@@ -1809,7 +1928,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                         />
                       </div>
                       <span className="text-[10px] text-slate-400 mt-0.5 block">
-                        Appears on this class&apos;s report cards under &apos;FORM TEACHER&apos;S NAME&apos;.
+                        Appears on student report cards under &apos;FORM TEACHER&apos;S NAME&apos;.
                       </span>
                     </div>
 

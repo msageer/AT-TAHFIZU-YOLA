@@ -194,8 +194,39 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
     try {
       const result = await parseAndValidateAssessmentSpreadsheet(file, db, session, term, className, section);
       setSheetImportResult(result);
+
+      if (result.errors && result.errors.length > 0 && result.totalRows === 0) {
+        setNotification({
+          text: `Assessment Sheet Upload Error: ${result.errors[0]?.message || 'Invalid format'}`,
+          type: 'error',
+        });
+        return;
+      }
+
+      // Automatically import: "sheet should automatically add or overwrite student and assessment"
+      if (onImportAssessmentSheet && result.assessmentRecords.length > 0) {
+        const studentsToPass =
+          result.allStudents && result.allStudents.length > 0
+            ? result.allStudents
+            : [...result.newStudentsToEnroll, ...result.existingStudentsMatched];
+
+        onImportAssessmentSheet(
+          studentsToPass,
+          result.assessmentRecords,
+          result.attendanceRecords,
+          result.detectedClasses,
+          result.detectedSections
+        );
+        setNotification({
+          text: `Uploaded and imported successfully! Added ${result.newStudentsToEnroll.length} new student(s), updated/overwritten ${result.existingStudentsMatched.length} existing student(s), and saved ${result.assessmentRecords.length} assessments.`,
+          type: 'success',
+        });
+      }
     } catch (err: any) {
-      alert(`Error reading assessment sheet: ${err.message || 'Invalid format'}`);
+      setNotification({
+        text: `Error reading assessment sheet: ${err.message || 'Invalid format'}`,
+        type: 'error',
+      });
     } finally {
       setIsUploadingSheet(false);
       if (sheetFileInputRef.current) sheetFileInputRef.current.value = '';
@@ -298,6 +329,8 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
           u.status !== 'disabled'
       );
       const defaultTeacher =
+        (section && matchedClass?.sectionTeachers?.[section]) ||
+        (section && matchedClass?.sectionTeachers?.[section.toUpperCase()]) ||
         assignedTeacherUser?.fullName ||
         matchedClass?.classTeacherName ||
         (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');
@@ -344,6 +377,8 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
           u.status !== 'disabled'
       );
       const defaultTeacher =
+        (section && matchedClass?.sectionTeachers?.[section]) ||
+        (section && matchedClass?.sectionTeachers?.[section.toUpperCase()]) ||
         assignedTeacherUser?.fullName ||
         matchedClass?.classTeacherName ||
         (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');

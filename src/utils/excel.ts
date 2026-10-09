@@ -585,6 +585,8 @@ export function exportAssessmentBroadsheetToExcel(
       'Student ID': rec.studentId,
       'Student Name': student ? student.name : rec.studentId,
       'Admission No': student ? student.admissionNumber : '',
+      Class: rec.className,
+      Arm: rec.section || '-',
       Gender: student ? student.gender : '',
     };
 
@@ -611,7 +613,8 @@ export function exportAssessmentBroadsheetToExcel(
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Broadsheet');
   const cleanClass = className.replace(/\s+/g, '_');
-  XLSX.writeFile(wb, `${cleanClass}_${section}_${term.replace(/\s+/g, '_')}_Broadsheet.xlsx`);
+  const sectionLabel = section === 'ALL' || !section ? 'All_Arms' : section;
+  XLSX.writeFile(wb, `${cleanClass}_${sectionLabel}_${term.replace(/\s+/g, '_')}_Broadsheet.xlsx`);
 }
 
 /**
@@ -1019,14 +1022,30 @@ export async function parseAndValidateAssessmentSpreadsheet(
   const lowerHeaders = rawHeaders.map(h => h.toLowerCase());
 
   // 3. Identify Meta Columns
-  const findColIndex = (predicates: string[]): number => {
-    return lowerHeaders.findIndex(h => predicates.some(p => h.includes(p)));
+  const findColIndex = (predicates: string[], exclusions: string[] = []): number => {
+    return lowerHeaders.findIndex(
+      h =>
+        predicates.some(p => h.includes(p)) &&
+        !exclusions.some(ex => h.includes(ex))
+    );
   };
 
-  let colName = findColIndex(['student name', 'pupil name', 'full name', 'candidate name', 'learner name', 'name of student', 'names']);
+  const nameExclusions = ['teacher', 'school', 'arabic', 'subject', 'head', 'sub'];
+  let colName = findColIndex(
+    ['student name', 'pupil name', 'full name', 'candidate name', 'learner name', 'name of student', 'names of student', 'student_name', 'pupil_name', 'names'],
+    nameExclusions
+  );
   if (colName === -1) {
-    colName = findColIndex(['name']);
+    colName = findColIndex(['student', 'pupil', 'candidate', 'learner', 'fullname'], nameExclusions);
   }
+  if (colName === -1) {
+    colName = findColIndex(['name'], nameExclusions);
+  }
+
+  // Also check for split Surname and First Name columns
+  const colSurname = findColIndex(['surname', 'last name', 'lastname'], nameExclusions);
+  const colFirstName = findColIndex(['first name', 'firstname', 'given name', 'other name', 'other names'], nameExclusions);
+
   const colAdm = findColIndex(['admission number', 'admission no', 'adm no', 'adm_no', 'admission', 'adm. no', 'adm']);
   const colId = findColIndex(['student id', 'studentid', 'student_id', 'id number', 'reg no', 'registration no']);
   const colClass = findColIndex(['class', 'grade', 'level']);
@@ -1039,6 +1058,24 @@ export async function parseAndValidateAssessmentSpreadsheet(
   const colDaysAbsent = findColIndex(['days absent', 'absent', 'times absent']);
   const colComment = findColIndex(['teacher comment', 'form teacher comment', 'remark', 'comment']);
   const colPromotion = findColIndex(['promotion remark', 'promotion']);
+
+  // If no single name column found, but surname & firstname found, we can use surname as reference
+  if (colName === -1 && colSurname !== -1) {
+    colName = colSurname;
+  }
+
+  // Fallback: If still not found, check if first or second column has text strings
+  if (colName === -1 && rawRows.length > headerRowIndex + 1) {
+    for (let c = 0; c < Math.min(4, lowerHeaders.length); c++) {
+      if (c !== colAdm && c !== colId && c !== colClass && c !== colSection) {
+        const sampleVal = String(rawRows[headerRowIndex + 1]?.[c] || '').trim();
+        if (sampleVal && isNaN(Number(sampleVal)) && sampleVal.length > 3) {
+          colName = c;
+          break;
+        }
+      }
+    }
+  }
 
   if (colName === -1) {
     return {
@@ -1216,7 +1253,17 @@ export async function parseAndValidateAssessmentSpreadsheet(
     const row = rawRows[r];
     if (!row || !Array.isArray(row)) continue;
 
-    const rowStudentName = String(row[colName] || '').replace(/\s+/g, ' ').trim();
+    let rowStudentName = '';
+    if (colSurname !== -1 && colFirstName !== -1 && colSurname !== colFirstName) {
+      const sur = String(row[colSurname] || '').trim();
+      const first = String(row[colFirstName] || '').trim();
+      if (sur && first) {
+        rowStudentName = `${sur} ${first}`.replace(/\s+/g, ' ').trim();
+      }
+    }
+    if (!rowStudentName) {
+      rowStudentName = String(row[colName] || '').replace(/\s+/g, ' ').trim();
+    }
     if (!rowStudentName) continue; // Skip empty row
 
     // Skip summary / footnote rows
@@ -1513,7 +1560,11 @@ export async function parseAndValidateAssessmentSpreadsheet(
         'psy-6': 'A',
         'psy-7': 'A',
       },
-      formTeacherName: matchedClassObj?.classTeacherName || db.settings.schoolName || 'Form Teacher',
+      formTeacherName:
+        (rowSection && (matchedClassObj?.sectionTeachers?.[rowSection] || matchedClassObj?.sectionTeachers?.[rowSection.toUpperCase()])) ||
+        matchedClassObj?.classTeacherName ||
+        db.settings.schoolName ||
+        'Form Teacher',
       formTeacherComment: autoComment,
       headTeacherName: db.settings.headTeacherName || 'Ustaz Al-Amin Kaigama',
       headTeacherComment: 'A commendable academic performance. Strive to maintain this standard.',

@@ -95,7 +95,8 @@ export function cascadeRenameClass(
   newOrder?: number,
   newFees?: string,
   newTeacher?: string,
-  newTermFees?: Record<string, string>
+  newTermFees?: Record<string, string>,
+  newSectionTeachers?: Record<string, string>
 ): AppDatabase {
   const oldTrimmed = oldClassName.trim();
   const newTrimmed = newClassName.trim();
@@ -111,6 +112,7 @@ export function cascadeRenameClass(
         ...(newFees !== undefined ? { nextTermFees: newFees } : {}),
         ...(newTeacher !== undefined ? { classTeacherName: newTeacher } : {}),
         ...(newTermFees !== undefined ? { termFees: newTermFees } : {}),
+        ...(newSectionTeachers !== undefined ? { sectionTeachers: newSectionTeachers } : {}),
       };
     }
     return c;
@@ -153,12 +155,13 @@ export function cascadeRenameClass(
           nextSection = newSections[0] || 'A';
         }
       }
+      const armTeacher = newSectionTeachers && nextSection ? newSectionTeachers[nextSection] : undefined;
       return {
         ...a,
         className: newTrimmed,
         section: nextSection,
         ...(newFees ? { nextTermFees: newFees } : {}),
-        ...(newTeacher ? { formTeacherName: newTeacher } : {}),
+        ...(armTeacher ? { formTeacherName: armTeacher } : (newTeacher ? { formTeacherName: newTeacher } : {})),
       };
     }
     return a;

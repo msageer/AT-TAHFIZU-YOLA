@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AppDatabase, Student, AssessmentRecord, UserAccount } from '../types';
 import { computeClassStatistics, rankAssessments } from '../utils/ranking';
 import { getSectionsForClass, formatClassWithSection } from '../utils/classSections';
+import { exportAssessmentBroadsheetToExcel } from '../utils/excel';
 import { ReportSheet } from './ReportSheet';
 import {
   FileText,
@@ -14,6 +15,7 @@ import {
   AlertCircle,
   Download,
   Lock,
+  Layers,
 } from 'lucide-react';
 
 interface ReportCenterProps {
@@ -56,15 +58,15 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
 
   const [selectedSection, setSelectedSection] = useState<string>(
     hasSections
-      ? (isTeacher && teacherSection ? teacherSection : (classSections[0] || 'A'))
+      ? (isTeacher && teacherSection ? teacherSection : 'ALL')
       : ''
   );
 
   // Synchronize section if current selection is not valid for this class
   useEffect(() => {
     if (hasSections) {
-      if (!classSections.includes(selectedSection)) {
-        setSelectedSection(classSections[0] || 'A');
+      if (selectedSection !== 'ALL' && !classSections.includes(selectedSection)) {
+        setSelectedSection('ALL');
       }
     } else {
       setSelectedSection('');
@@ -82,6 +84,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
 
   // Preview Modal
   const [isPreviewOpen, setIsPreviewOpen] = useState<boolean>(false);
+  const [exportNotification, setExportNotification] = useState<string | null>(null);
 
   // Toggle multi-class checkboxes
   const handleToggleClassMulti = (clsName: string) => {
@@ -98,11 +101,14 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     }
   };
 
-  // Get eligible students for the current single-class filter
+  // Get eligible students for the current single-class filter (including all arms when selectedSection is ALL)
   const singleClassStudents = db.students.filter(s => {
     if (s.className !== selectedClass || s.status !== 'Active') return false;
     if (hasSections) {
-      return s.section === selectedSection;
+      if (selectedSection && selectedSection !== 'ALL') {
+        return s.section === selectedSection;
+      }
+      return true; // When 'ALL', include all students across arms (hundreds of students)
     }
     return true; // Classes without A and B have NO section
   });
@@ -115,34 +121,68 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
   }> = [];
 
   if (generationMode === 'single-class') {
-    // Rank all assessments for this specific class (and section if applicable)
-    const rawClassAssessments = db.assessments.filter(a => {
-      if (a.className !== selectedClass || a.academicSession !== session || a.term !== term) return false;
-      if (hasSections) {
-        return a.section === selectedSection;
-      }
-      return true;
-    });
-    const rankedClassAssessments = rankAssessments(rawClassAssessments);
-    const classStats = computeClassStatistics(rankedClassAssessments);
+    if (hasSections && selectedSection === 'ALL') {
+      // Group by arm/section so students in Arm A and Arm B are each ranked accurately with their respective Form Masters!
+      const arms = classSections.length > 0 ? classSections : [''];
+      arms.forEach(armName => {
+        const rawArmAssessments = db.assessments.filter(
+          a =>
+            a.className === selectedClass &&
+            (!armName || a.section === armName) &&
+            a.academicSession === session &&
+            a.term === term
+        );
+        const rankedArmAssessments = rankAssessments(rawArmAssessments);
+        const armStats = computeClassStatistics(rankedArmAssessments);
 
-    const targetStudents =
-      selectedStudentId === 'ALL'
-        ? singleClassStudents
-        : singleClassStudents.filter(s => s.studentId === selectedStudentId);
+        const targetStudents =
+          selectedStudentId === 'ALL'
+            ? singleClassStudents.filter(s => !armName || s.section === armName)
+            : singleClassStudents.filter(s => s.studentId === selectedStudentId && (!armName || s.section === armName));
 
-    targetStudents.forEach(student => {
-      const assessment = rankedClassAssessments.find(a => a.studentId === student.studentId);
-      if (assessment) {
-        reportsToGenerate.push({
-          student,
-          assessment,
-          stats: classStats,
+        targetStudents.forEach(student => {
+          const assessment =
+            rankedArmAssessments.find(a => a.studentId === student.studentId) ||
+            rawArmAssessments.find(a => a.studentId === student.studentId);
+          if (assessment) {
+            reportsToGenerate.push({
+              student,
+              assessment,
+              stats: armStats,
+            });
+          }
         });
-      }
-    });
+      });
+    } else {
+      // Specific section or single stream class
+      const rawClassAssessments = db.assessments.filter(a => {
+        if (a.className !== selectedClass || a.academicSession !== session || a.term !== term) return false;
+        if (hasSections && selectedSection && selectedSection !== 'ALL') {
+          return a.section === selectedSection;
+        }
+        return true;
+      });
+      const rankedClassAssessments = rankAssessments(rawClassAssessments);
+      const classStats = computeClassStatistics(rankedClassAssessments);
+
+      const targetStudents =
+        selectedStudentId === 'ALL'
+          ? singleClassStudents
+          : singleClassStudents.filter(s => s.studentId === selectedStudentId);
+
+      targetStudents.forEach(student => {
+        const assessment = rankedClassAssessments.find(a => a.studentId === student.studentId);
+        if (assessment) {
+          reportsToGenerate.push({
+            student,
+            assessment,
+            stats: classStats,
+          });
+        }
+      });
+    }
   } else {
-    // Multi-Class mode: gather for all selected classes
+    // Multi-Class mode: gather for all selected classes (supports hundreds of reports)
     selectedClassesMulti.forEach(clsName => {
       // Find all sections that have students in this class
       const classStudents = db.students.filter(
@@ -176,14 +216,28 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     });
   }
 
-  // Dedicated state for printing single vs all students
+  // Dedicated state for printing single vs all vs batch ranges (hundreds of students)
   const [printSingleStudentId, setPrintSingleStudentId] = useState<string | null>(null);
+  const [printRange, setPrintRange] = useState<{ start: number; end: number; label: string } | null>(null);
 
-  // Trigger print for all currently selected report sheets
+  // Trigger print for all currently selected report sheets (all hundreds)
   const handlePrintAll = () => {
     setPrintSingleStudentId(null);
+    setPrintRange(null);
     setTimeout(() => {
       window.print();
+    }, 50);
+  };
+
+  // Trigger batch print (e.g., 50 at a time for optimal browser printing when hundreds exist)
+  const handlePrintBatch = (start: number, end: number, label: string) => {
+    setPrintSingleStudentId(null);
+    setPrintRange({ start, end, label });
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => {
+        setPrintRange(null);
+      }, 500);
     }, 50);
   };
 
@@ -194,6 +248,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
       return;
     }
     setPrintSingleStudentId(studentId);
+    setPrintRange(null);
     setTimeout(() => {
       window.print();
       setTimeout(() => {
@@ -202,10 +257,64 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
     }, 50);
   };
 
-  // Filter reports if single print is active
-  const reportsToRender = printSingleStudentId
-    ? reportsToGenerate.filter(item => item.student.studentId === printSingleStudentId)
-    : reportsToGenerate;
+  // Export all current reports (even if hundreds) to Excel Broadsheet
+  const handleExportReportsToExcel = () => {
+    if (reportsToGenerate.length === 0) return;
+    const records = reportsToGenerate.map(r => r.assessment);
+    const studentMap: Record<string, Student> = {};
+    reportsToGenerate.forEach(r => {
+      studentMap[r.student.studentId] = r.student;
+    });
+
+    const exportSectionLabel =
+      generationMode === 'single-class'
+        ? selectedSection === 'ALL' || !selectedSection
+          ? 'All_Arms'
+          : selectedSection
+        : 'Multi_Classes';
+
+    const exportClassName =
+      generationMode === 'single-class' ? selectedClass : 'Selected_Classes';
+
+    exportAssessmentBroadsheetToExcel(
+      records,
+      studentMap,
+      exportClassName,
+      exportSectionLabel,
+      session,
+      term
+    );
+
+    setExportNotification(`Successfully exported ${records.length} report broadsheet records to Excel!`);
+    setTimeout(() => setExportNotification(null), 5000);
+  };
+
+  // Filter reports if single print or batch print is active
+  const reportsToRender = useMemo(() => {
+    if (printSingleStudentId) {
+      return reportsToGenerate.filter(item => item.student.studentId === printSingleStudentId);
+    }
+    if (printRange) {
+      return reportsToGenerate.slice(printRange.start, printRange.end);
+    }
+    return reportsToGenerate;
+  }, [reportsToGenerate, printSingleStudentId, printRange]);
+
+  // Compute batches of 50 for large student populations (hundreds)
+  const printBatches = useMemo(() => {
+    if (reportsToGenerate.length <= 30) return [];
+    const batches: Array<{ start: number; end: number; label: string }> = [];
+    const batchSize = 50;
+    for (let i = 0; i < reportsToGenerate.length; i += batchSize) {
+      const end = Math.min(i + batchSize, reportsToGenerate.length);
+      batches.push({
+        start: i,
+        end,
+        label: `Reports ${i + 1} - ${end}`,
+      });
+    }
+    return batches;
+  }, [reportsToGenerate.length]);
 
   return (
     <div className="space-y-6">
@@ -218,11 +327,20 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleExportReportsToExcel}
+            disabled={reportsToGenerate.length === 0}
+            className="bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-lg transition flex items-center space-x-1.5 shadow cursor-pointer"
+            title="Export all selected reports (hundreds) directly to Excel broadsheet"
+          >
+            <Download className="w-4 h-4" />
+            <span>Export to Excel ({reportsToGenerate.length})</span>
+          </button>
           <button
             onClick={() => setIsPreviewOpen(true)}
             disabled={reportsToGenerate.length === 0}
-            className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+            className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition flex items-center space-x-1.5 shadow cursor-pointer"
           >
             <Eye className="w-4 h-4" />
             <span>Preview ({reportsToGenerate.length})</span>
@@ -353,15 +471,15 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                {isTeacher && teacherSection ? 'Section (Locked)' : 'Section'}
+                {isTeacher && teacherSection ? 'Arm / Section (Locked)' : 'Arm / Section'}
               </label>
               {!hasSections ? (
                 <div className="w-full text-xs font-medium border border-slate-200 rounded-lg p-2 bg-slate-100 text-slate-500 italic flex items-center justify-between">
-                  <span>No Section (Single Stream)</span>
+                  <span>No Section (Entire Class)</span>
                 </div>
               ) : isTeacher && teacherSection ? (
                 <div className="w-full text-xs font-bold border border-amber-300 rounded-lg p-2 bg-amber-50 text-amber-900 flex items-center justify-between">
-                  <span>Section {selectedSection}</span>
+                  <span>Arm {selectedSection}</span>
                   <Lock className="w-3.5 h-3.5 text-amber-600" />
                 </div>
               ) : (
@@ -370,11 +488,17 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                   onChange={e => setSelectedSection(e.target.value)}
                   className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-white"
                 >
-                  {classSections.map(secName => (
-                    <option key={secName} value={secName}>
-                      Section {secName}
-                    </option>
-                  ))}
+                  <option value="ALL">All Arms / All Sections (Entire Class - Hundreds)</option>
+                  {classSections.map(secName => {
+                    const armCount = db.students.filter(
+                      s => s.className === selectedClass && s.section === secName && s.status === 'Active'
+                    ).length;
+                    return (
+                      <option key={secName} value={secName}>
+                        Arm {secName} ({armCount} students)
+                      </option>
+                    );
+                  })}
                 </select>
               )}
             </div>
@@ -401,7 +525,7 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
                     type="button"
                     onClick={() => handlePrintSingle(selectedStudentId)}
                     disabled={reportsToGenerate.length === 0}
-                    className="px-3 py-2 bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition flex items-center space-x-1 shadow-sm flex-shrink-0"
+                    className="px-3 py-2 bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-bold rounded-lg transition flex items-center space-x-1 shadow-sm flex-shrink-0 cursor-pointer"
                     title="Print this student's report card on single A4 page"
                   >
                     <Printer className="w-3.5 h-3.5" />
@@ -456,16 +580,78 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
           </div>
         )}
 
+        {exportNotification && (
+          <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-lg text-xs text-emerald-900 font-semibold flex items-center justify-between animate-in fade-in">
+            <span>{exportNotification}</span>
+            <button
+              onClick={() => setExportNotification(null)}
+              className="text-emerald-700 hover:text-emerald-900"
+            >
+              &times;
+            </button>
+          </div>
+        )}
+
         {/* Selected Summary Info */}
-        <div className="p-3 rounded-lg bg-blue-50/70 border border-blue-200 text-xs text-blue-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <span className="font-bold">Ready to generate:</span>{' '}
-            <strong className="text-emerald-700 font-black">{reportsToGenerate.length}</strong>{' '}
-            student report sheet(s).
+        <div className="p-3.5 rounded-lg bg-blue-50/80 border border-blue-200 text-xs text-blue-900 space-y-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <span className="font-bold">Ready to generate:</span>{' '}
+              <strong className="text-emerald-700 font-black text-sm">{reportsToGenerate.length}</strong>{' '}
+              student report sheet(s).
+              {printRange && (
+                <span className="ml-2 font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded border border-purple-300">
+                  Currently Filtering: {printRange.label} (
+                  <button
+                    onClick={() => setPrintRange(null)}
+                    className="underline hover:text-purple-900 cursor-pointer ml-1"
+                  >
+                    Show All
+                  </button>
+                  )
+                </span>
+              )}
+            </div>
+            <div className="text-[11px] text-blue-800 font-medium">
+              Formatted strictly for single A4 portrait paper pages with zero multi-page spills.
+            </div>
           </div>
-          <div className="text-[11px] text-blue-800">
-            Formatted strictly for single A4 portrait paper pages with zero multi-page spills.
-          </div>
+
+          {/* Batch Print Selector for Large Classes (Hundreds of Reports) */}
+          {printBatches.length > 0 && (
+            <div className="pt-2 border-t border-blue-200/60 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-bold text-slate-700 flex items-center mr-1">
+                <Layers className="w-3.5 h-3.5 mr-1 text-blue-600" />
+                Batch Print ({reportsToGenerate.length} total pages):
+              </span>
+              <button
+                type="button"
+                onClick={handlePrintAll}
+                className={`px-2 py-1 rounded text-[11px] font-bold transition cursor-pointer ${
+                  !printRange
+                    ? 'bg-blue-700 text-white shadow-xs'
+                    : 'bg-white text-blue-900 border border-blue-300 hover:bg-blue-50'
+                }`}
+              >
+                Print All ({reportsToGenerate.length})
+              </button>
+              {printBatches.map(batch => (
+                <button
+                  key={batch.label}
+                  type="button"
+                  onClick={() => handlePrintBatch(batch.start, batch.end, batch.label)}
+                  className={`px-2 py-1 rounded text-[11px] font-semibold transition cursor-pointer ${
+                    printRange?.label === batch.label
+                      ? 'bg-purple-700 text-white shadow-xs font-bold'
+                      : 'bg-white text-purple-900 border border-purple-200 hover:bg-purple-50'
+                  }`}
+                  title={`Spool ${batch.label} to printer`}
+                >
+                  {batch.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

@@ -85,7 +85,8 @@ export interface ClassItem {
   sections?: string[]; // Specific sections/arms for this class: [] (Default / No Section), or ['A', 'B'] (Arms A & B)
   nextTermFees?: string; // Specific next term fees for this class e.g. "₦ 14,000"
   termFees?: Record<string, string>; // Per-term specific fees e.g. { "1st Term": "₦ 18,000", "2nd Term": "₦ 15,000", "3rd Term": "₦ 16,000" }
-  classTeacherName?: string; // Assigned class / form teacher name
+  classTeacherName?: string; // Assigned fallback class / form teacher name
+  sectionTeachers?: Record<string, string>; // Distinct form master for each arm/section e.g. { "A": "Ustaz A", "B": "Ustaza B" }
 }
 
 export interface SectionItem {

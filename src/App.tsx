@@ -554,7 +554,8 @@ export default function App() {
             s.studentId &&
             s.studentId.toLowerCase().trim() === sheetStu.studentId.toLowerCase().trim()) ||
           (s.name.toLowerCase().trim() === sheetStu.name.toLowerCase().trim() &&
-            s.className.toLowerCase().trim() === sheetStu.className.toLowerCase().trim())
+            s.className.toLowerCase().trim() === sheetStu.className.toLowerCase().trim()) ||
+          (s.name.toLowerCase().trim() === sheetStu.name.toLowerCase().trim())
       );
 
       if (matchIndex >= 0) {

@@ -82,7 +82,14 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
   const [assessmentTerm, setAssessmentTerm] = useState<string>(
     db.settings.currentTerm || '1st Term'
   );
-  const [assessmentNotification, setAssessmentNotification] = useState<string | null>(null);
+  const [assessmentNotification, setAssessmentNotification] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+  const [exportNotification, setExportNotification] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const assessmentFileInputRef = useRef<HTMLInputElement>(null);
 
   // Download Assessment Sheet Template
@@ -110,8 +117,44 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
         assessmentTerm
       );
       setAssessmentResult(result);
+
+      if (result.errors && result.errors.length > 0 && result.totalRows === 0) {
+        setAssessmentNotification({
+          type: 'error',
+          message: `Assessment Sheet Upload Error: ${result.errors[0]?.message || 'Invalid format'}`,
+        });
+        setTimeout(() => setAssessmentNotification(null), 8000);
+        return;
+      }
+
+      // Automatically import: "sheet should automatically add or overwrite student and assessment"
+      if (onImportAssessmentSheet && result.assessmentRecords.length > 0) {
+        const studentsToPass =
+          result.allStudents && result.allStudents.length > 0
+            ? result.allStudents
+            : [...result.newStudentsToEnroll, ...result.existingStudentsMatched];
+
+        onImportAssessmentSheet(
+          studentsToPass,
+          result.assessmentRecords,
+          result.attendanceRecords,
+          result.detectedClasses,
+          result.detectedSections
+        );
+
+        const msg = `Successfully uploaded & imported! Added ${result.newStudentsToEnroll.length} new student(s), updated/overwritten ${result.existingStudentsMatched.length} existing student(s), and recorded/overwritten ${result.assessmentRecords.length} assessments.`;
+        setAssessmentNotification({
+          type: 'success',
+          message: msg,
+        });
+        setTimeout(() => setAssessmentNotification(null), 8000);
+      }
     } catch (err: any) {
-      alert(`Error reading assessment sheet: ${err.message || 'Invalid format'}`);
+      setAssessmentNotification({
+        type: 'error',
+        message: `Error reading assessment sheet: ${err.message || 'Invalid format'}`,
+      });
+      setTimeout(() => setAssessmentNotification(null), 8000);
     } finally {
       setIsAssessmentProcessing(false);
       if (assessmentFileInputRef.current) assessmentFileInputRef.current.value = '';
@@ -137,7 +180,10 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
       );
 
       const msg = `Successfully imported assessment sheet! Added ${assessmentResult.newStudentsToEnroll.length} new student(s), updated/overwritten ${assessmentResult.existingStudentsMatched.length} existing student(s), and recorded/overwritten ${assessmentResult.assessmentRecords.length} assessments.`;
-      setAssessmentNotification(msg);
+      setAssessmentNotification({
+        type: 'success',
+        message: msg,
+      });
       setAssessmentResult(null);
       setAssessmentUploadFileName('');
       setTimeout(() => setAssessmentNotification(null), 6000);
@@ -154,6 +200,7 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
   const [detectedSections, setDetectedSections] = useState<string[]>([]);
   const [validationResult, setValidationResult] = useState<FlexibleImportResult | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [studentErrorMessage, setStudentErrorMessage] = useState<string | null>(null);
   const studentFileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDownloadStudentTemplate = () => {
@@ -193,7 +240,8 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
       );
       setValidationResult(result);
     } catch (err: any) {
-      alert(`Error reading student spreadsheet: ${err.message || 'Invalid format'}`);
+      setStudentErrorMessage(`Error reading student spreadsheet: ${err.message || 'Invalid format'}`);
+      setTimeout(() => setStudentErrorMessage(null), 8000);
     } finally {
       setIsProcessing(false);
       if (studentFileInputRef.current) studentFileInputRef.current.value = '';
@@ -272,9 +320,7 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
   const [broadsheetClass, setBroadsheetClass] = useState<string>(
     db.classes[0]?.name || 'Nursery One'
   );
-  const [broadsheetSection, setBroadsheetSection] = useState<string>(
-    db.sections[0]?.name || 'A'
-  );
+  const [broadsheetSection, setBroadsheetSection] = useState<string>('ALL');
 
   const handleExportStudents = () => {
     const list =
@@ -283,23 +329,37 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
         : db.students;
 
     if (list.length === 0) {
-      alert('No student records found to export for the selected filter.');
+      setExportNotification({
+        type: 'error',
+        message: 'No student records found to export for the selected filter.',
+      });
+      setTimeout(() => setExportNotification(null), 5000);
       return;
     }
     exportStudentsToExcel(list, exportScope === 'class' ? selectedClassForExport : 'School_Students');
+    setExportNotification({
+      type: 'success',
+      message: `Successfully exported ${list.length} student records to Excel!`,
+    });
+    setTimeout(() => setExportNotification(null), 5000);
   };
 
   const handleExportBroadsheet = () => {
     const records = db.assessments.filter(
       a =>
         a.className === broadsheetClass &&
-        a.section === broadsheetSection &&
+        (broadsheetSection === 'ALL' || !broadsheetSection || a.section === broadsheetSection) &&
         a.academicSession === broadsheetSession &&
         a.term === broadsheetTerm
     );
 
     if (records.length === 0) {
-      alert(`No assessment records found for ${broadsheetClass} (${broadsheetSection}) in ${broadsheetTerm}.`);
+      const secDesc = broadsheetSection === 'ALL' ? 'all arms' : `Arm ${broadsheetSection}`;
+      setExportNotification({
+        type: 'error',
+        message: `No assessment records found for ${broadsheetClass} (${secDesc}) in ${broadsheetTerm}.`,
+      });
+      setTimeout(() => setExportNotification(null), 6000);
       return;
     }
 
@@ -316,6 +376,11 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
       broadsheetSession,
       broadsheetTerm
     );
+    setExportNotification({
+      type: 'success',
+      message: `Successfully exported ${records.length} assessment broadsheet record(s) for ${broadsheetClass} to Excel!`,
+    });
+    setTimeout(() => setExportNotification(null), 5000);
   };
 
   const handleExportAttendance = () => {
@@ -332,11 +397,20 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
     );
 
     if (records.length === 0) {
-      alert('No attendance records found for this session and term.');
+      setExportNotification({
+        type: 'error',
+        message: 'No attendance records found for this session and term.',
+      });
+      setTimeout(() => setExportNotification(null), 5000);
       return;
     }
 
     exportAttendanceToExcel(records, studentMap, broadsheetSession, broadsheetTerm, broadsheetClass);
+    setExportNotification({
+      type: 'success',
+      message: `Successfully exported ${records.length} attendance record(s) to Excel!`,
+    });
+    setTimeout(() => setExportNotification(null), 5000);
   };
 
   const ca1Max = db.settings.ca1Max || 20;
@@ -396,9 +470,28 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
 
       {/* Notifications */}
       {assessmentNotification && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800 flex items-center space-x-2 animate-in fade-in">
-          <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-          <span>{assessmentNotification}</span>
+        <div
+          className={`p-4 rounded-xl text-xs font-semibold flex items-center justify-between space-x-2 animate-in fade-in ${
+            assessmentNotification.type === 'success'
+              ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border border-rose-200 text-rose-800'
+          }`}
+        >
+          <div className="flex items-center space-x-2">
+            {assessmentNotification.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+            )}
+            <span>{assessmentNotification.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAssessmentNotification(null)}
+            className="text-slate-500 hover:text-slate-700 ml-2 font-bold"
+          >
+            &times;
+          </button>
         </div>
       )}
 
@@ -802,6 +895,13 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
             </div>
           )}
 
+          {studentErrorMessage && (
+            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-800 flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+              <span>{studentErrorMessage}</span>
+            </div>
+          )}
+
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
             <div className="flex items-center space-x-2.5 text-blue-900">
               <div className="p-2 rounded-lg bg-blue-50 text-blue-800">
@@ -947,161 +1047,185 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
       {/* TAB 3: EXPORTS (BROADSHEETS & ATTENDANCE)                 */}
       {/* ========================================================= */}
       {activeTab === 'exports' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Card: Export Students */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
-            <div className="flex items-center space-x-2.5 text-blue-900">
-              <div className="p-2 rounded-lg bg-blue-50 text-blue-800">
-                <Users className="w-5 h-5" />
+        <div className="space-y-4">
+          {exportNotification && (
+            <div
+              className={`p-3 rounded-lg text-xs font-semibold flex items-center justify-between animate-in fade-in ${
+                exportNotification.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-900 border border-emerald-300'
+                  : 'bg-rose-50 text-rose-900 border border-rose-300'
+              }`}
+            >
+              <span>{exportNotification.message}</span>
+              <button
+                type="button"
+                onClick={() => setExportNotification(null)}
+                className="text-slate-500 hover:text-slate-700 ml-2"
+              >
+                &times;
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Card: Export Students */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+              <div className="flex items-center space-x-2.5 text-blue-900">
+                <div className="p-2 rounded-lg bg-blue-50 text-blue-800">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Export Student Directory</h3>
+                  <p className="text-xs text-slate-500">Download registered students to Excel (.xlsx)</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Export Student Directory</h3>
-                <p className="text-xs text-slate-500">Download registered students to Excel (.xlsx)</p>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Export Scope</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      value={exportScope}
+                      onChange={e => setExportScope(e.target.value as any)}
+                      className="border border-slate-300 rounded p-2 bg-slate-50"
+                    >
+                      <option value="all">All Students ({db.students.length})</option>
+                      <option value="class">Filter by Class</option>
+                    </select>
+
+                    {exportScope === 'class' && (
+                      <select
+                        value={selectedClassForExport}
+                        onChange={e => setSelectedClassForExport(e.target.value)}
+                        className="border border-slate-300 rounded p-2 bg-white"
+                      >
+                        {db.classes.map(c => (
+                          <option key={c.id} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleExportStudents}
+                  className="w-full bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold py-2.5 px-4 rounded-lg transition shadow flex items-center justify-center space-x-2 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Export Students to Excel</span>
+                </button>
               </div>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">Export Scope</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    value={exportScope}
-                    onChange={e => setExportScope(e.target.value as any)}
-                    className="border border-slate-300 rounded p-2 bg-slate-50"
-                  >
-                    <option value="all">All Students ({db.students.length})</option>
-                    <option value="class">Filter by Class</option>
-                  </select>
+            {/* Card: Export Assessment Broadsheet & Attendance */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
+              <div className="flex items-center space-x-2.5 text-purple-900">
+                <div className="p-2 rounded-lg bg-purple-50 text-purple-800">
+                  <Award className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Export Class Broadsheets (Hundreds)</h3>
+                  <p className="text-xs text-slate-500">Download terminal assessment broadsheets &amp; attendance</p>
+                </div>
+              </div>
 
-                  {exportScope === 'class' && (
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Class</label>
+                  <select
+                    value={broadsheetClass}
+                    onChange={e => {
+                      const newCls = e.target.value;
+                      setBroadsheetClass(newCls);
+                      const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
+                      if (validSecs.length > 0) {
+                        setBroadsheetSection('ALL');
+                      } else {
+                        setBroadsheetSection('');
+                      }
+                    }}
+                    className="w-full border border-slate-300 rounded p-2 bg-white"
+                  >
+                    {db.classes.map(c => (
+                      <option key={c.id} value={c.name}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Arm / Section</label>
+                  {getSectionsForClass(broadsheetClass, db.classes, db.sections).length === 0 ? (
+                    <div className="w-full border border-slate-200 rounded p-2 bg-slate-100 text-slate-500 italic text-xs">
+                      No Section (Entire Class)
+                    </div>
+                  ) : (
                     <select
-                      value={selectedClassForExport}
-                      onChange={e => setSelectedClassForExport(e.target.value)}
-                      className="border border-slate-300 rounded p-2 bg-white"
+                      value={broadsheetSection}
+                      onChange={e => setBroadsheetSection(e.target.value)}
+                      className="w-full border border-slate-300 rounded p-2 bg-white font-semibold"
                     >
-                      {db.classes.map(c => (
-                        <option key={c.id} value={c.name}>
-                          {c.name}
+                      <option value="ALL">All Arms / All Sections (Entire Class)</option>
+                      {getSectionsForClass(broadsheetClass, db.classes, db.sections).map(secName => (
+                        <option key={secName} value={secName}>
+                          Arm {secName}
                         </option>
                       ))}
                     </select>
                   )}
                 </div>
-              </div>
 
-              <button
-                onClick={handleExportStudents}
-                className="w-full bg-blue-700 hover:bg-blue-800 text-white text-xs font-semibold py-2.5 px-4 rounded-lg transition shadow flex items-center justify-center space-x-2"
-              >
-                <Download className="w-4 h-4" />
-                <span>Export Students to Excel</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Card: Export Assessment Broadsheet & Attendance */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
-            <div className="flex items-center space-x-2.5 text-purple-900">
-              <div className="p-2 rounded-lg bg-purple-50 text-purple-800">
-                <Award className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Export Class Broadsheets</h3>
-                <p className="text-xs text-slate-500">Download terminal assessment broadsheets &amp; attendance</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">Class</label>
-                <select
-                  value={broadsheetClass}
-                  onChange={e => {
-                    const newCls = e.target.value;
-                    setBroadsheetClass(newCls);
-                    const validSecs = getSectionsForClass(newCls, db.classes, db.sections);
-                    if (!validSecs.includes(broadsheetSection)) {
-                      setBroadsheetSection(validSecs[0] || 'A');
-                    }
-                  }}
-                  className="w-full border border-slate-300 rounded p-2 bg-white"
-                >
-                  {db.classes.map(c => (
-                    <option key={c.id} value={c.name}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">Section</label>
-                {getSectionsForClass(broadsheetClass, db.classes, db.sections).length === 0 ? (
-                  <div className="w-full border border-slate-200 rounded p-2 bg-slate-100 text-slate-500 italic text-xs">
-                    No Section (Class Only)
-                  </div>
-                ) : (
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Session</label>
                   <select
-                    value={broadsheetSection}
-                    onChange={e => setBroadsheetSection(e.target.value)}
+                    value={broadsheetSession}
+                    onChange={e => setBroadsheetSession(e.target.value)}
                     className="w-full border border-slate-300 rounded p-2 bg-white"
                   >
-                    {getSectionsForClass(broadsheetClass, db.classes, db.sections).map(secName => (
-                      <option key={secName} value={secName}>
-                        Section {secName}
+                    {db.sessions.map(s => (
+                      <option key={s} value={s}>
+                        {s}
                       </option>
                     ))}
                   </select>
-                )}
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 uppercase mb-1">Term</label>
+                  <select
+                    value={broadsheetTerm}
+                    onChange={e => setBroadsheetTerm(e.target.value)}
+                    className="w-full border border-slate-300 rounded p-2 bg-white"
+                  >
+                    {db.terms.map(t => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">Session</label>
-                <select
-                  value={broadsheetSession}
-                  onChange={e => setBroadsheetSession(e.target.value)}
-                  className="w-full border border-slate-300 rounded p-2 bg-white"
+              <div className="flex items-center space-x-2 pt-1">
+                <button
+                  onClick={handleExportBroadsheet}
+                  className="flex-1 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold py-2.5 px-3 rounded-lg transition shadow flex items-center justify-center space-x-1.5 cursor-pointer"
                 >
-                  {db.sessions.map(s => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                  <Download className="w-4 h-4" />
+                  <span>Export Broadsheet</span>
+                </button>
 
-              <div>
-                <label className="block font-bold text-slate-700 uppercase mb-1">Term</label>
-                <select
-                  value={broadsheetTerm}
-                  onChange={e => setBroadsheetTerm(e.target.value)}
-                  className="w-full border border-slate-300 rounded p-2 bg-white"
+                <button
+                  onClick={handleExportAttendance}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2.5 px-3 rounded-lg transition shadow flex items-center justify-center space-x-1.5 cursor-pointer"
                 >
-                  {db.terms.map(t => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
+                  <CalendarCheck className="w-4 h-4" />
+                  <span>Export Attendance</span>
+                </button>
               </div>
-            </div>
-
-            <div className="flex items-center space-x-2 pt-1">
-              <button
-                onClick={handleExportBroadsheet}
-                className="flex-1 bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold py-2.5 px-3 rounded-lg transition shadow flex items-center justify-center space-x-1.5"
-              >
-                <Download className="w-4 h-4" />
-                <span>Export Broadsheet</span>
-              </button>
-
-              <button
-                onClick={handleExportAttendance}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold py-2.5 px-3 rounded-lg transition shadow flex items-center justify-center space-x-1.5"
-              >
-                <CalendarCheck className="w-4 h-4" />
-                <span>Export Attendance</span>
-              </button>
             </div>
           </div>
         </div>

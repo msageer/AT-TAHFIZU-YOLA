@@ -83,6 +83,16 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
 
   // Automatically fetch Form Teacher's name from available roles in school setup
   const resolvedFormTeacher = useMemo(() => {
+    // 0. Distinct Arm/Section specific form master configured in Class Setup (e.g. Arm A: Ustaz A, Arm B: Ustaza B)
+    if (studentSection && matchedClass?.sectionTeachers) {
+      const armKey = Object.keys(matchedClass.sectionTeachers).find(
+        k => k.trim().toLowerCase() === studentSection.trim().toLowerCase()
+      );
+      if (armKey && matchedClass.sectionTeachers[armKey]?.trim()) {
+        return matchedClass.sectionTeachers[armKey].trim();
+      }
+    }
+
     // 1. Direct match: Teacher from users with role 'teacher' or 'staff' assigned to this class and section
     if (users && users.length > 0) {
       if (studentSection) {

@@ -60,13 +60,16 @@ export interface FirestoreErrorInfo {
 
 const QUOTA_STORAGE_KEY = 'islamic_school_firestore_quota_exhausted_v1';
 
-// Track in-memory quota exhaustion state (defaults to true since the Free tier daily write units quota is currently exceeded)
-let quotaExhaustedInMemory = true;
+// Track in-memory quota exhaustion state (defaults to false so synchronization operates live)
+let quotaExhaustedInMemory = false;
 
-// Immediately disable backend network on startup to cancel internal backoff streams and prevent console error floods
+// Clear any stale local quota blocks on startup so multi-device sync connects immediately
 if (typeof window !== 'undefined') {
   try {
-    disableNetwork(db).catch(() => {});
+    sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+    localStorage.removeItem(QUOTA_STORAGE_KEY);
+    // Ensure network is active
+    enableNetwork(db).catch(() => {});
   } catch {
     // ignore
   }
@@ -88,31 +91,10 @@ export function isQuotaExceededError(error: unknown): boolean {
 }
 
 /**
- * Returns true if Firestore daily write quota was previously marked as exhausted today.
+ * Returns true only if Firestore daily write quota was actually rejected with resource-exhausted.
  */
 export function isQuotaExhausted(): boolean {
-  if (quotaExhaustedInMemory) {
-    return true;
-  }
-  try {
-    const raw =
-      typeof sessionStorage !== 'undefined'
-        ? sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY)
-        : null;
-    if (!raw) return false;
-    const data = JSON.parse(raw);
-    if (Date.now() - data.timestamp < 24 * 60 * 60 * 1000) {
-      quotaExhaustedInMemory = true;
-      return true;
-    }
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-    }
-    return false;
-  } catch {
-    return true;
-  }
+  return quotaExhaustedInMemory;
 }
 
 /**
@@ -237,16 +219,7 @@ export function sanitizeForFirestore<T>(val: T): T {
 }
 
 let isSyncInProgress = false;
-let lastSyncedChecksum: string = '';
-
-function computeDatabaseChecksum(appDb: AppDatabase): string {
-  const s = appDb.settings;
-  const setHash = `${s.schoolName}-${s.currentSession}-${s.currentTerm}-${s.schoolCloses}-${s.nextTermBegins}-${s.defaultNextTermFees}`;
-  const counts = `${appDb.students?.length || 0}-${appDb.assessments?.length || 0}-${appDb.attendance?.length || 0}-${appDb.users?.length || 0}-${appDb.classes?.length || 0}`;
-  const lastStu = appDb.students?.[appDb.students.length - 1]?.id || '';
-  const lastAsm = appDb.assessments?.[appDb.assessments.length - 1]?.id || '';
-  return `${setHash}|${counts}|${lastStu}|${lastAsm}`;
-}
+let pendingSyncDb: AppDatabase | null = null;
 
 /**
  * Sync entire AppDatabase to Firestore in a transactional/batch-safe manner.
@@ -258,14 +231,9 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
     return;
   }
 
-  // Prevent concurrent conflicting syncs
+  // If another sync is actively executing, queue this state so the latest data is NEVER dropped
   if (isSyncInProgress) {
-    return;
-  }
-
-  // Skip redundant writes if database state hasn't changed since last successful sync
-  const currentChecksum = computeDatabaseChecksum(appDb);
-  if (currentChecksum === lastSyncedChecksum) {
+    pendingSyncDb = appDb;
     return;
   }
 
@@ -356,8 +324,6 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
       });
       await batch.commit();
     }
-
-    lastSyncedChecksum = currentChecksum;
   } catch (error) {
     if (isQuotaExceededError(error)) {
       markQuotaExhausted();
@@ -368,6 +334,14 @@ export async function syncDatabaseToFirestore(appDb: AppDatabase): Promise<void>
     throw error;
   } finally {
     isSyncInProgress = false;
+    // If a database update arrived while this sync was writing, immediately sync the newest version
+    if (pendingSyncDb) {
+      const nextDb = pendingSyncDb;
+      pendingSyncDb = null;
+      syncDatabaseToFirestore(nextDb).catch(err => {
+        console.warn('Deferred multi-device sync warning:', err);
+      });
+    }
   }
 }
 
@@ -499,7 +473,8 @@ export function setupRealtimeSync(
               ...existing,
               ...cc,
               termFees: { ...(existing.termFees || {}), ...(cc.termFees || {}) },
-              classTeacherName: existing.classTeacherName || cc.classTeacherName,
+              classTeacherName: cc.classTeacherName || existing.classTeacherName,
+              sectionTeachers: { ...(existing.sectionTeachers || {}), ...(cc.sectionTeachers || {}) },
             });
           }
         });
@@ -600,28 +575,34 @@ export function setupRealtimeSync(
         cloudAssessments.push(docSnap.data() as AssessmentRecord);
       });
 
-      // NON-DESTRUCTIVE ASSESSMENT MERGE: Never drop local assessments
+      // NON-DESTRUCTIVE ASSESSMENT MERGE: Ensure Device B receives real assessment uploads from Device A
       const asmMap = new Map<string, AssessmentRecord>();
       (activeSyncAccumulator.assessments || []).forEach(a => {
-        asmMap.set(`${a.studentId}__${a.academicSession}__${a.term}`, a);
+        const key = `${a.studentId}__${a.academicSession}__${a.term}`;
+        asmMap.set(key, a);
+        if (a.id) asmMap.set(a.id, a);
       });
       cloudAssessments.forEach(ca => {
         const key = `${ca.studentId}__${ca.academicSession}__${ca.term}`;
-        const existing = asmMap.get(key);
+        const existing = asmMap.get(key) || (ca.id ? asmMap.get(ca.id) : undefined);
         if (!existing) {
           asmMap.set(key, ca);
+          if (ca.id) asmMap.set(ca.id, ca);
         } else {
           const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
           const cloudTime = ca.updatedAt ? new Date(ca.updatedAt).getTime() : 0;
-          if (cloudTime > localTime) {
+          const localHasScores = Boolean(existing.subjectScores && existing.subjectScores.length > 0);
+          const cloudHasScores = Boolean(ca.subjectScores && ca.subjectScores.length > 0);
+          if (cloudTime >= localTime || (!localHasScores && cloudHasScores)) {
             asmMap.set(key, ca);
+            if (ca.id) asmMap.set(ca.id, ca);
           }
         }
       });
 
       activeSyncAccumulator = {
         ...activeSyncAccumulator,
-        assessments: Array.from(asmMap.values()),
+        assessments: Array.from(new Set(asmMap.values())),
       };
       notifyChange();
     },

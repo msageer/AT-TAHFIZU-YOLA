@@ -76,6 +76,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
   const [detectedClasses, setDetectedClasses] = useState<string[]>([]);
   const [detectedSections, setDetectedSections] = useState<string[]>([]);
   const [validationResult, setValidationResult] = useState<FlexibleImportResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Classes & Sections to potentially auto-create
   const [createdClasses, setCreatedClasses] = useState<ClassItem[]>([...db.classes]);
@@ -117,7 +118,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
       );
       setValidationResult(result);
     } catch (err: any) {
-      alert(`Error reading spreadsheet: ${err.message || 'Invalid file format'}`);
+      setErrorMessage(`Error reading spreadsheet: ${err.message || 'Invalid file format'}`);
     } finally {
       setIsProcessing(false);
       if (spreadsheetInputRef.current) spreadsheetInputRef.current.value = '';
@@ -695,6 +696,19 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
           )}
         </div>
 
+        {errorMessage && (
+          <div className="mt-4 p-3 bg-rose-50 border border-rose-300 rounded-lg text-xs font-semibold text-rose-900 flex items-center justify-between">
+            <span>{errorMessage}</span>
+            <button
+              type="button"
+              onClick={() => setErrorMessage(null)}
+              className="text-rose-600 hover:text-rose-900 font-bold ml-2"
+            >
+              &times;
+            </button>
+          </div>
+        )}
+
         {/* Wizard Footer Navigation */}
         <div className="border-t border-slate-200 pt-4 mt-4 flex items-center justify-between">
           <div>
@@ -716,9 +730,10 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
                 type="button"
                 onClick={() => {
                   if (currentStep === 1 && !settings.schoolName.trim()) {
-                    alert('Please enter your School Name before proceeding.');
+                    setErrorMessage('Please enter your School Name before proceeding.');
                     return;
                   }
+                  setErrorMessage(null);
                   setCurrentStep((currentStep + 1) as any);
                 }}
                 className="bg-blue-800 hover:bg-blue-900 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition flex items-center space-x-1.5 shadow"
