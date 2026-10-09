@@ -653,6 +653,7 @@ export function exportAttendanceToExcel(
 export interface AssessmentSheetImportResult {
   totalRows: number;
   validRecords: number;
+  allStudents: Student[];
   newStudentsToEnroll: Student[];
   existingStudentsMatched: Student[];
   assessmentRecords: AssessmentRecord[];
@@ -901,13 +902,33 @@ export async function parseAndValidateAssessmentSpreadsheet(
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: 'array' });
 
-  // Select score sheet
+  // 1. Select score sheet intelligently
   let sheetName = wb.SheetNames[0];
   if (wb.SheetNames.includes('Assessment_Scores')) {
     sheetName = 'Assessment_Scores';
+  } else if (overrideClass && wb.SheetNames.some(s => s.toLowerCase().includes(overrideClass.toLowerCase()))) {
+    sheetName = wb.SheetNames.find(s => s.toLowerCase().includes(overrideClass.toLowerCase()))!;
   } else {
-    const candidate = wb.SheetNames.find(n => !n.toLowerCase().includes('guard') && !n.toLowerCase().includes('rule'));
-    if (candidate) sheetName = candidate;
+    // Scan all sheets to find the one containing student rows
+    let bestSheet = wb.SheetNames[0];
+    let maxScore = -1;
+    for (const sName of wb.SheetNames) {
+      if (sName.toLowerCase().includes('guard') || sName.toLowerCase().includes('rule') || sName.toLowerCase().includes('instruction')) {
+        continue;
+      }
+      const testWs = wb.Sheets[sName];
+      const rows: any[][] = XLSX.utils.sheet_to_json(testWs, { header: 1 });
+      if (!rows || rows.length === 0) continue;
+      let score = rows.length;
+      const headerSnippet = rows.slice(0, 10).flat().map(c => String(c || '').toLowerCase()).join(' ');
+      if (headerSnippet.includes('name') || headerSnippet.includes('student')) score += 500;
+      if (headerSnippet.includes('ca') || headerSnippet.includes('exam') || headerSnippet.includes('score')) score += 500;
+      if (score > maxScore) {
+        maxScore = score;
+        bestSheet = sName;
+      }
+    }
+    sheetName = bestSheet;
   }
 
   const ws = wb.Sheets[sheetName];
@@ -920,6 +941,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
     return {
       totalRows: 0,
       validRecords: 0,
+      allStudents: [],
       newStudentsToEnroll: [],
       existingStudentsMatched: [],
       assessmentRecords: [],
@@ -932,48 +954,97 @@ export async function parseAndValidateAssessmentSpreadsheet(
     };
   }
 
-  // 1. Find Header Row
+  // 2. Intelligent Multi-Score Header Row Detection
   let headerRowIndex = 0;
-  for (let r = 0; r < Math.min(10, rawRows.length); r++) {
+  let highestHeaderScore = -1;
+
+  for (let r = 0; r < Math.min(25, rawRows.length); r++) {
     const row = rawRows[r];
-    if (Array.isArray(row)) {
-      const lowerTexts = row.map(cell => String(cell || '').toLowerCase().trim());
-      const hasName = lowerTexts.some(t => t.includes('name') || t.includes('student'));
-      const hasClass = lowerTexts.some(t => t.includes('class') || t.includes('grade'));
-      const hasScore = lowerTexts.some(t => t.includes('ca') || t.includes('exam') || t.includes('score'));
-      if (hasName && (hasClass || hasScore)) {
-        headerRowIndex = r;
-        break;
+    if (!Array.isArray(row)) continue;
+    const lowerTexts = row.map(cell => String(cell || '').toLowerCase().trim()).filter(Boolean);
+    if (lowerTexts.length === 0) continue;
+
+    let score = 0;
+    // Check for student name indicators
+    if (lowerTexts.some(t => t.includes('student name') || t.includes('pupil name') || t.includes('full name') || t === 'name' || t.includes('candidate'))) {
+      score += 50;
+    } else if (lowerTexts.some(t => t.includes('name') || t.includes('student') || t.includes('pupil'))) {
+      score += 30;
+    }
+
+    // Check for admission / ID
+    if (lowerTexts.some(t => t.includes('adm') || t.includes('admission') || t.includes('id') || t.includes('reg'))) score += 20;
+    // Check for class / grade / section
+    if (lowerTexts.some(t => t.includes('class') || t.includes('grade') || t.includes('section') || t.includes('arm'))) score += 20;
+    // Check for score keywords
+    if (lowerTexts.some(t => t.includes('ca1') || t.includes('ca2') || t.includes('exam') || t.includes('total') || t.includes('score') || t.includes('test'))) score += 30;
+
+    // Check for known subject names
+    const hasKnownSubject = lowerTexts.some(t =>
+      (db.subjects || []).some(s => t.includes(s.name.toLowerCase().trim())) ||
+      ['arabic', 'english', 'mathematics', 'maths', 'quran', 'hadith', 'islamic', 'irs', 'science', 'computer'].some(kw => t.includes(kw))
+    );
+    if (hasKnownSubject) score += 25;
+
+    if (score > highestHeaderScore) {
+      highestHeaderScore = score;
+      headerRowIndex = r;
+    }
+  }
+
+  // Support 2-row merged headers if row right below has CA1/CA2/Exam or row right above has subject names
+  const baseHeaderRow = (rawRows[headerRowIndex] || []).map(cell => String(cell || '').trim());
+  const combinedHeaders: string[] = [...baseHeaderRow];
+
+  const nextRow = rawRows[headerRowIndex + 1];
+  if (Array.isArray(nextRow)) {
+    const nextLower = nextRow.map(c => String(c || '').toLowerCase().trim());
+    const isSubHeaderRow = nextLower.some(t => t.includes('ca') || t.includes('exam') || t.includes('test') || t.includes('total'));
+    if (isSubHeaderRow) {
+      // Propagate parent subject names to subheaders
+      let currentParentHeader = '';
+      for (let i = 0; i < Math.max(baseHeaderRow.length, nextRow.length); i++) {
+        if (baseHeaderRow[i] && baseHeaderRow[i].trim() !== '') {
+          currentParentHeader = baseHeaderRow[i].trim();
+        }
+        const sub = String(nextRow[i] || '').trim();
+        if (sub && currentParentHeader && !sub.toLowerCase().includes('name') && !sub.toLowerCase().includes('adm')) {
+          combinedHeaders[i] = `${currentParentHeader} ${sub}`.trim();
+        }
       }
     }
   }
 
-  const rawHeaders = (rawRows[headerRowIndex] || []).map(cell => String(cell || '').trim());
+  const rawHeaders = combinedHeaders;
   const lowerHeaders = rawHeaders.map(h => h.toLowerCase());
 
-  // 2. Identify Meta Columns
+  // 3. Identify Meta Columns
   const findColIndex = (predicates: string[]): number => {
     return lowerHeaders.findIndex(h => predicates.some(p => h.includes(p)));
   };
 
-  const colName = findColIndex(['student name', 'pupil name', 'name', 'full name']);
-  const colAdm = findColIndex(['admission number', 'admission no', 'adm no', 'adm_no', 'admission']);
-  const colId = findColIndex(['student id', 'studentid', 'student_id', 'id number', 'reg no']);
+  let colName = findColIndex(['student name', 'pupil name', 'full name', 'candidate name', 'learner name', 'name of student', 'names']);
+  if (colName === -1) {
+    colName = findColIndex(['name']);
+  }
+  const colAdm = findColIndex(['admission number', 'admission no', 'adm no', 'adm_no', 'admission', 'adm. no', 'adm']);
+  const colId = findColIndex(['student id', 'studentid', 'student_id', 'id number', 'reg no', 'registration no']);
   const colClass = findColIndex(['class', 'grade', 'level']);
   const colSection = findColIndex(['section', 'arm', 'stream']);
   const colGender = findColIndex(['gender', 'sex']);
   const colSession = findColIndex(['session', 'academic session', 'year']);
   const colTerm = findColIndex(['term', 'semester']);
-  const colDaysOpened = findColIndex(['days opened', 'school opened', 'opened']);
-  const colDaysPresent = findColIndex(['days present', 'present', 'attendance']);
-  const colDaysAbsent = findColIndex(['days absent', 'absent']);
-  const colComment = findColIndex(['comment', 'teacher comment', 'teacher remark', 'remark']);
+  const colDaysOpened = findColIndex(['days opened', 'school opened', 'opened', 'times opened']);
+  const colDaysPresent = findColIndex(['days present', 'present', 'times present', 'attendance']);
+  const colDaysAbsent = findColIndex(['days absent', 'absent', 'times absent']);
+  const colComment = findColIndex(['teacher comment', 'form teacher comment', 'remark', 'comment']);
   const colPromotion = findColIndex(['promotion remark', 'promotion']);
 
   if (colName === -1) {
     return {
       totalRows: 0,
       validRecords: 0,
+      allStudents: [],
       newStudentsToEnroll: [],
       existingStudentsMatched: [],
       assessmentRecords: [],
@@ -993,7 +1064,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
     };
   }
 
-  // 3. Map Subject Score Columns
+  // 4. Map Subject Score Columns
   const activeSubjects = (db.subjects || []).filter(s => s.isActive);
   const detectedSubjectCols: Array<{
     subjectName: string;
@@ -1005,14 +1076,23 @@ export async function parseAndValidateAssessmentSpreadsheet(
     colTotal: number;
   }> = [];
 
-  const registeredSubjectNames = activeSubjects.map(s => s.name);
   const detectedSubjectNamesSet = new Set<string>();
 
-  // Helper to test if a header relates to a subject
+  // Helper to match subject with aliases
   const matchSubjectInHeader = (headerLower: string, subName: string): boolean => {
     const cleanSub = subName.toLowerCase().replace(/[^a-z0-9]/g, '');
     const cleanH = headerLower.replace(/[^a-z0-9]/g, '');
-    return cleanH.includes(cleanSub);
+    if (cleanH.includes(cleanSub)) return true;
+
+    // Common subject aliases
+    if (cleanSub.includes('math') && cleanH.includes('math')) return true;
+    if (cleanSub.includes('eng') && cleanH.includes('eng')) return true;
+    if (cleanSub.includes('arabic') && (cleanH.includes('arab') || cleanH.includes('lugh'))) return true;
+    if (cleanSub.includes('islam') && (cleanH.includes('islam') || cleanH.includes('irs') || cleanH.includes('is'))) return true;
+    if (cleanSub.includes('quran') && cleanH.includes('qur')) return true;
+    if (cleanSub.includes('hadith') && cleanH.includes('had')) return true;
+    if (cleanSub.includes('tahfiz') && cleanH.includes('tahf')) return true;
+    return false;
   };
 
   activeSubjects.forEach(sub => {
@@ -1022,17 +1102,17 @@ export async function parseAndValidateAssessmentSpreadsheet(
     let colTotal = -1;
 
     lowerHeaders.forEach((h, idx) => {
+      if (idx === colName || idx === colAdm || idx === colId || idx === colClass || idx === colSection || idx === colGender) return;
       if (matchSubjectInHeader(h, sub.name)) {
-        if (h.includes('ca1') || h.includes('1st ca') || h.includes('ca 1') || h.includes('first ca') || h.includes('test 1')) {
+        if (h.includes('ca1') || h.includes('1st ca') || h.includes('ca 1') || h.includes('first ca') || h.includes('test 1') || h.includes('1st test')) {
           colCa1 = idx;
-        } else if (h.includes('ca2') || h.includes('2nd ca') || h.includes('ca 2') || h.includes('second ca') || h.includes('test 2')) {
+        } else if (h.includes('ca2') || h.includes('2nd ca') || h.includes('ca 2') || h.includes('second ca') || h.includes('test 2') || h.includes('2nd test')) {
           colCa2 = idx;
         } else if (h.includes('exam') || h.includes('examination')) {
           colExam = idx;
         } else if (h.includes('total') || h.includes('score')) {
           colTotal = idx;
         } else if (colExam === -1 && colCa1 === -1 && colCa2 === -1) {
-          // If just subject name with no prefix, treat as exam or total
           colExam = idx;
         }
       }
@@ -1052,7 +1132,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
     }
   });
 
-  // Also check if there are other subject columns not in db.subjects
+  // Auto-detect columns that look like subjects not already mapped
   lowerHeaders.forEach((h, idx) => {
     const isMeta = [
       colName,
@@ -1071,23 +1151,21 @@ export async function parseAndValidateAssessmentSpreadsheet(
     ].includes(idx);
 
     if (!isMeta) {
-      // Check if already captured in registered subjects
       const alreadyCaptured = detectedSubjectCols.some(
         ds => ds.colCa1 === idx || ds.colCa2 === idx || ds.colExam === idx || ds.colTotal === idx
       );
       if (!alreadyCaptured) {
-        // Try extracting a subject name e.g. "Biology Exam" -> "Biology"
         const cleanTitle = rawHeaders[idx]
           .replace(/\(.*\)/g, '')
-          .replace(/ca1|ca2|exam|total|max\s*\d+/gi, '')
+          .replace(/ca1|ca2|exam|total|score|max\s*\d+|test/gi, '')
           .trim();
-        if (cleanTitle.length > 2 && !detectedSubjectNamesSet.has(cleanTitle)) {
+        if (cleanTitle.length >= 2 && !detectedSubjectNamesSet.has(cleanTitle)) {
           detectedSubjectCols.push({
             subjectName: cleanTitle,
             arabicName: cleanTitle,
             subjectId: `sub-detected-${cleanTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-            colCa1: h.includes('ca1') ? idx : -1,
-            colCa2: h.includes('ca2') ? idx : -1,
+            colCa1: h.includes('ca1') || h.includes('test 1') ? idx : -1,
+            colCa2: h.includes('ca2') || h.includes('test 2') ? idx : -1,
             colExam: h.includes('exam') ? idx : (h.includes('ca') ? -1 : idx),
             colTotal: h.includes('total') ? idx : -1,
           });
@@ -1101,6 +1179,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
   const ca2Max = db.settings.ca2Max || 20;
   const examMax = db.settings.examMax || 60;
 
+  const allStudents: Student[] = [];
   const newStudentsToEnroll: Student[] = [];
   const existingStudentsMatched: Student[] = [];
   const rawAssessmentRecords: AssessmentRecord[] = [];
@@ -1108,42 +1187,71 @@ export async function parseAndValidateAssessmentSpreadsheet(
   const detectedClassesSet = new Set<string>();
   const detectedSectionsSet = new Set<string>();
 
-  // Track existing student database
-  const existingStudentMap = new Map<string, Student>();
+  // Map existing students for fast, accurate matching
+  const existingStudentByAdm = new Map<string, Student>();
+  const existingStudentById = new Map<string, Student>();
+  const existingStudentByNameAndClass = new Map<string, Student>();
+  const existingStudentByName = new Map<string, Student>();
+
   (db.students || []).forEach(s => {
-    if (s.admissionNumber) existingStudentMap.set(`adm:${s.admissionNumber.toLowerCase().trim()}`, s);
-    if (s.studentId) existingStudentMap.set(`id:${s.studentId.toLowerCase().trim()}`, s);
-    existingStudentMap.set(`name_class:${s.name.toLowerCase().trim()}__${s.className.toLowerCase().trim()}`, s);
+    if (s.admissionNumber) existingStudentByAdm.set(s.admissionNumber.toLowerCase().trim(), s);
+    if (s.studentId) existingStudentById.set(s.studentId.toLowerCase().trim(), s);
+    const normName = s.name.toLowerCase().replace(/\s+/g, ' ').trim();
+    const normClass = (s.className || '').toLowerCase().trim();
+    existingStudentByNameAndClass.set(`${normName}__${normClass}`, s);
+    if (!existingStudentByName.has(normName)) {
+      existingStudentByName.set(normName, s);
+    }
   });
 
   let studentIdCounter = (db.students?.length || 0) + 1;
   const sessionYear = (overrideSession || db.settings.currentSession || '2026/2027').split('/')[0];
 
-  // 4. Parse Rows
-  for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
+  // 5. Parse Each Student & Assessment Row
+  const startRow = nextRow && nextRow.some(c => String(c || '').toLowerCase().includes('ca') || String(c || '').toLowerCase().includes('exam'))
+    ? headerRowIndex + 2
+    : headerRowIndex + 1;
+
+  for (let r = startRow; r < rawRows.length; r++) {
     const row = rawRows[r];
     if (!row || !Array.isArray(row)) continue;
 
-    const rowStudentName = String(row[colName] || '').trim();
+    const rowStudentName = String(row[colName] || '').replace(/\s+/g, ' ').trim();
     if (!rowStudentName) continue; // Skip empty row
-    if (rowStudentName.toUpperCase().startsWith('NOTE') || rowStudentName.startsWith('---')) continue;
 
-    const rowClass = (colClass !== -1 && row[colClass] ? String(row[colClass]).trim() : '') ||
+    // Skip summary / footnote rows
+    const upperName = rowStudentName.toUpperCase();
+    if (
+      upperName.startsWith('NOTE') ||
+      upperName.startsWith('---') ||
+      upperName.startsWith('TOTAL') ||
+      upperName.startsWith('AVERAGE') ||
+      upperName.startsWith('GRAND') ||
+      upperName.startsWith('CLASS TEACHER') ||
+      upperName.startsWith('HEAD TEACHER')
+    ) {
+      continue;
+    }
+
+    const rowClass =
+      (colClass !== -1 && row[colClass] ? String(row[colClass]).trim() : '') ||
       overrideClass ||
       db.classes[0]?.name ||
       'Primary One';
 
-    const rowSection = (colSection !== -1 && row[colSection] ? String(row[colSection]).trim() : '') ||
+    const rowSection =
+      (colSection !== -1 && row[colSection] ? String(row[colSection]).trim() : '') ||
       overrideSection ||
-      db.sections[0]?.name ||
-      'A';
+      (db.sections[0]?.name || 'A');
 
-    const rowSession = (colSession !== -1 && row[colSession] ? String(row[colSession]).trim() : '') ||
+    const rowSession =
+      (colSession !== -1 && row[colSession] ? String(row[colSession]).trim() : '') ||
       overrideSession ||
       db.settings.currentSession ||
       '2026/2027';
 
-    const rowTerm = (colTerm !== -1 && row[colTerm] ? String(row[colTerm]).trim() : '') ||
+    const rowTerm =
+      (colTerm !== -1 && row[colTerm] ? String(row[colTerm]).trim() : '') ||
       overrideTerm ||
       db.settings.currentTerm ||
       '1st Term';
@@ -1155,23 +1263,59 @@ export async function parseAndValidateAssessmentSpreadsheet(
     detectedClassesSet.add(rowClass);
     if (rowSection) detectedSectionsSet.add(rowSection);
 
-    // MATCH OR AUTO-ENROLL STUDENT
-    let studentObj: Student | null = null;
+    // =========================================================================
+    // AUTOMATIC STUDENT ADDITION OR OVERWRITE
+    // "if student is not added is should add student or overwrite it"
+    // =========================================================================
+    let matchedExisting: Student | null = null;
+    const normName = rowStudentName.toLowerCase().replace(/\s+/g, ' ').trim();
+    const normClass = rowClass.toLowerCase().trim();
 
-    if (rawAdm && existingStudentMap.has(`adm:${rawAdm.toLowerCase()}`)) {
-      studentObj = existingStudentMap.get(`adm:${rawAdm.toLowerCase()}`)!;
-    } else if (rawId && existingStudentMap.has(`id:${rawId.toLowerCase()}`)) {
-      studentObj = existingStudentMap.get(`id:${rawId.toLowerCase()}`)!;
-    } else if (existingStudentMap.has(`name_class:${rowStudentName.toLowerCase()}__${rowClass.toLowerCase()}`)) {
-      studentObj = existingStudentMap.get(`name_class:${rowStudentName.toLowerCase()}__${rowClass.toLowerCase()}`)!;
+    if (rawAdm && existingStudentByAdm.has(rawAdm.toLowerCase().trim())) {
+      matchedExisting = existingStudentByAdm.get(rawAdm.toLowerCase().trim())!;
+    } else if (rawId && existingStudentById.has(rawId.toLowerCase().trim())) {
+      matchedExisting = existingStudentById.get(rawId.toLowerCase().trim())!;
+    } else if (existingStudentByNameAndClass.has(`${normName}__${normClass}`)) {
+      matchedExisting = existingStudentByNameAndClass.get(`${normName}__${normClass}`)!;
+    } else if (existingStudentByName.has(normName)) {
+      matchedExisting = existingStudentByName.get(normName)!;
     }
 
-    if (studentObj) {
-      if (!existingStudentsMatched.some(s => s.id === studentObj!.id)) {
+    let studentObj: Student;
+
+    if (matchedExisting) {
+      // OVERWRITE EXISTING STUDENT: Update with information from the sheet
+      const resolvedGender = rawGender
+        ? (rawGender.startsWith('f') ? 'Female' : 'Male')
+        : matchedExisting.gender;
+
+      studentObj = {
+        ...matchedExisting,
+        name: rowStudentName,
+        className: rowClass,
+        section: rowSection !== undefined ? rowSection : matchedExisting.section,
+        gender: resolvedGender,
+        admissionNumber: rawAdm || matchedExisting.admissionNumber,
+        studentId: rawId || matchedExisting.studentId,
+        status: 'Active',
+        academicHistory: [
+          ...(matchedExisting.academicHistory || []).filter(h => !(h.session === rowSession && h.term === rowTerm)),
+          {
+            session: rowSession,
+            term: rowTerm,
+            className: rowClass,
+            section: rowSection,
+            date: new Date().toISOString().split('T')[0],
+            remark: 'Updated via Assessment Sheet Upload',
+          },
+        ],
+      };
+
+      if (!existingStudentsMatched.some(s => s.id === studentObj.id)) {
         existingStudentsMatched.push(studentObj);
       }
     } else {
-      // Check if we already auto-enrolled this student in an earlier row of this sheet
+      // Check if we already created this student in an earlier row of this sheet
       const newlyAdded = newStudentsToEnroll.find(
         ns =>
           (rawAdm && ns.admissionNumber.toLowerCase() === rawAdm.toLowerCase()) ||
@@ -1182,13 +1326,12 @@ export async function parseAndValidateAssessmentSpreadsheet(
       if (newlyAdded) {
         studentObj = newlyAdded;
       } else {
-        // AUTOMATIC STUDENT ENROLLMENT:
-        // Create new student in portal! Remaining fields can be updated later in Students menu.
+        // AUTOMATICALLY ENROLL NEW STUDENT
         const generatedStudentId = rawId || `STU-${sessionYear}-${String(studentIdCounter).padStart(3, '0')}`;
         const generatedAdmissionNumber = rawAdm || `ADM/${sessionYear}/${String(studentIdCounter).padStart(3, '0')}`;
         studentIdCounter++;
 
-        const newStudent: Student = {
+        studentObj = {
           id: `stu-${Date.now()}-${r}-${Math.random().toString(36).substr(2, 5)}`,
           schoolId: db.schoolId || 'school-main',
           studentId: generatedStudentId,
@@ -1210,15 +1353,19 @@ export async function parseAndValidateAssessmentSpreadsheet(
           ],
         };
 
-        newStudentsToEnroll.push(newStudent);
-        existingStudentMap.set(`adm:${newStudent.admissionNumber.toLowerCase()}`, newStudent);
-        existingStudentMap.set(`id:${newStudent.studentId.toLowerCase()}`, newStudent);
-        existingStudentMap.set(`name_class:${newStudent.name.toLowerCase()}__${newStudent.className.toLowerCase()}`, newStudent);
-        studentObj = newStudent;
+        newStudentsToEnroll.push(studentObj);
+        existingStudentByAdm.set(studentObj.admissionNumber.toLowerCase(), studentObj);
+        existingStudentById.set(studentObj.studentId.toLowerCase(), studentObj);
+        existingStudentByNameAndClass.set(`${studentObj.name.toLowerCase()}__${studentObj.className.toLowerCase()}`, studentObj);
       }
     }
 
-    // EXTRACT SUBJECT SCORES
+    allStudents.push(studentObj);
+
+    // =========================================================================
+    // EXTRACT SUBJECT SCORES & BUILD ASSESSMENT RECORD
+    // "if assessment is not added it should add or overwrite it"
+    // =========================================================================
     const subjectScores: SubjectScore[] = [];
 
     detectedSubjectCols.forEach(dsc => {
@@ -1236,7 +1383,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
             warnings.push({
               row: r + 1,
               field: `${dsc.subjectName} CA1`,
-              message: `CA1 score (${ca1}) exceeds maximum ${ca1Max}. Score was recorded.`,
+              message: `CA1 score (${ca1}) exceeds maximum ${ca1Max}. Score recorded.`,
               type: 'warning',
             });
           }
@@ -1252,7 +1399,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
             warnings.push({
               row: r + 1,
               field: `${dsc.subjectName} CA2`,
-              message: `CA2 score (${ca2}) exceeds maximum ${ca2Max}. Score was recorded.`,
+              message: `CA2 score (${ca2}) exceeds maximum ${ca2Max}. Score recorded.`,
               type: 'warning',
             });
           }
@@ -1268,14 +1415,14 @@ export async function parseAndValidateAssessmentSpreadsheet(
             warnings.push({
               row: r + 1,
               field: `${dsc.subjectName} Exam`,
-              message: `Exam score (${exam}) exceeds maximum ${examMax}. Score was recorded.`,
+              message: `Exam score (${exam}) exceeds maximum ${examMax}. Score recorded.`,
               type: 'warning',
             });
           }
         }
       }
 
-      // If only Total column was given
+      // If only Total was provided
       if (!hasAnyScore && dsc.colTotal !== -1 && row[dsc.colTotal] !== undefined && row[dsc.colTotal] !== '') {
         const val = Number(row[dsc.colTotal]);
         if (!isNaN(val)) {
@@ -1301,7 +1448,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
       }
     });
 
-    // ATTENDANCE & CONDUCT
+    // Attendance & Remarks
     const daysOpened = colDaysOpened !== -1 && row[colDaysOpened] !== undefined ? Number(row[colDaysOpened]) || 90 : 90;
     const daysPresent = colDaysPresent !== -1 && row[colDaysPresent] !== undefined ? Number(row[colDaysPresent]) || 85 : 85;
     const daysAbsent = colDaysAbsent !== -1 && row[colDaysAbsent] !== undefined ? Number(row[colDaysAbsent]) || Math.max(0, daysOpened - daysPresent) : Math.max(0, daysOpened - daysPresent);
@@ -1325,8 +1472,26 @@ export async function parseAndValidateAssessmentSpreadsheet(
       autoPromotion = finalAverage >= 50 ? 'PASS & PROMOTED' : 'FAIR';
     }
 
+    // Resolve teacher and leadership
+    const matchedClassObj = db.classes.find(c => c.name.toLowerCase().trim() === rowClass.toLowerCase().trim());
+    const termCfg = db.settings.termSettings?.[rowTerm];
+    const defaultFees =
+      matchedClassObj?.termFees?.[rowTerm] ||
+      termCfg?.classFees?.[rowClass] ||
+      matchedClassObj?.nextTermFees ||
+      termCfg?.defaultFees ||
+      db.settings.defaultNextTermFees ||
+      '₦ 16,000';
+    const defaultSchoolCloses =
+      termCfg?.schoolCloses || db.settings.schoolCloses || '24th Dhul Hijjah 1447 / 10th June 2026';
+    const defaultNextTermBegins =
+      termCfg?.nextTermBegins || db.settings.nextTermBegins || '04th Muharram 1448 / 20th July 2026';
+
+    const safeSessionKey = rowSession.replace(/[\/\s]/g, '-');
+    const safeTermKey = rowTerm.replace(/[\/\s]/g, '');
+
     const assessmentRecord: AssessmentRecord = {
-      id: `asm-${studentObj.studentId}-${rowSession.replace('/', '-')}-${rowTerm.replace(/\s+/g, '')}`,
+      id: `asm-${studentObj.studentId}-${safeSessionKey}-${safeTermKey}`,
       schoolId: db.schoolId || 'school-main',
       studentId: studentObj.studentId,
       academicSession: rowSession,
@@ -1348,12 +1513,14 @@ export async function parseAndValidateAssessmentSpreadsheet(
         'psy-6': 'A',
         'psy-7': 'A',
       },
-      formTeacherName: db.settings.schoolName || 'Form Teacher',
+      formTeacherName: matchedClassObj?.classTeacherName || db.settings.schoolName || 'Form Teacher',
       formTeacherComment: autoComment,
+      headTeacherName: db.settings.headTeacherName || 'Ustaz Al-Amin Kaigama',
+      headTeacherComment: 'A commendable academic performance. Strive to maintain this standard.',
       promotionRemark: autoPromotion,
-      schoolCloses: db.settings.currentSession ? `End of ${rowTerm}` : '',
-      nextTermBegins: 'To be announced',
-      nextTermFees: '',
+      schoolCloses: defaultSchoolCloses,
+      nextTermBegins: defaultNextTermBegins,
+      nextTermFees: defaultFees,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1361,7 +1528,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
 
     if (daysOpened > 0) {
       attendanceRecords.push({
-        id: `att-${studentObj.studentId}-${rowSession.replace('/', '-')}-${rowTerm.replace(/\s+/g, '')}`,
+        id: `att-${studentObj.studentId}-${safeSessionKey}-${safeTermKey}`,
         schoolId: db.schoolId || 'school-main',
         studentId: studentObj.studentId,
         academicSession: rowSession,
@@ -1377,7 +1544,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
     }
   }
 
-  // 5. Rank Assessments within class/section groups
+  // 6. Rank Assessments within Class/Section groups
   const groupedAssessments: Record<string, AssessmentRecord[]> = {};
   rawAssessmentRecords.forEach(rec => {
     const key = `${rec.className}__${rec.section}__${rec.academicSession}__${rec.term}`;
@@ -1394,6 +1561,7 @@ export async function parseAndValidateAssessmentSpreadsheet(
   return {
     totalRows: rawAssessmentRecords.length,
     validRecords: finalRankedAssessments.length,
+    allStudents,
     newStudentsToEnroll,
     existingStudentsMatched,
     assessmentRecords: finalRankedAssessments,

@@ -99,12 +99,18 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
 
   // Synchronize internal state whenever db changes externally to prevent stale overwrites
   useEffect(() => {
+    setSchoolSettings(prev => ({
+      ...prev,
+      ...db.settings,
+      classFees: { ...(db.settings.classFees || {}), ...(prev.classFees || {}) },
+      termSettings: { ...(db.settings.termSettings || {}), ...(prev.termSettings || {}) },
+    }));
     setClasses([...db.classes]);
     setSections([...db.sections]);
     setSubjects([...db.subjects]);
     setGradingBoundaries([...db.gradingBoundaries]);
     setPsychomotorItems([...db.psychomotorItems]);
-  }, [db.classes, db.sections, db.subjects, db.gradingBoundaries, db.psychomotorItems]);
+  }, [db.settings, db.classes, db.sections, db.subjects, db.gradingBoundaries, db.psychomotorItems]);
 
   // Available teachers (from db.users with role teacher or staff, plus any assigned form teachers)
   const availableTeachers = useMemo(() => {

@@ -118,20 +118,25 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
     }
   };
 
-  // Confirm Assessment Import (with Automatic Student Enrollment)
+  // Confirm Assessment Import (with Automatic Student Enrollment and Overwrite)
   const handleConfirmAssessmentImport = () => {
     if (!assessmentResult) return;
 
     if (onImportAssessmentSheet) {
+      const studentsToPass =
+        assessmentResult.allStudents && assessmentResult.allStudents.length > 0
+          ? assessmentResult.allStudents
+          : [...assessmentResult.newStudentsToEnroll, ...assessmentResult.existingStudentsMatched];
+
       onImportAssessmentSheet(
-        assessmentResult.newStudentsToEnroll,
+        studentsToPass,
         assessmentResult.assessmentRecords,
         assessmentResult.attendanceRecords,
         assessmentResult.detectedClasses,
         assessmentResult.detectedSections
       );
 
-      const msg = `Successfully imported assessment sheet! Auto-enrolled ${assessmentResult.newStudentsToEnroll.length} new student(s) and recorded ${assessmentResult.assessmentRecords.length} assessment records.`;
+      const msg = `Successfully imported assessment sheet! Added ${assessmentResult.newStudentsToEnroll.length} new student(s), updated/overwritten ${assessmentResult.existingStudentsMatched.length} existing student(s), and recorded/overwritten ${assessmentResult.assessmentRecords.length} assessments.`;
       setAssessmentNotification(msg);
       setAssessmentResult(null);
       setAssessmentUploadFileName('');
@@ -631,20 +636,20 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
 
                 <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-center ring-2 ring-emerald-500/20">
                   <span className="text-[10px] font-bold text-emerald-800 uppercase block">
-                    ★ Auto-Enroll Students
+                    ★ Auto-Enroll (New)
                   </span>
                   <span className="text-xl font-black text-emerald-700">
                     +{assessmentResult.newStudentsToEnroll.length}
                   </span>
-                  <span className="text-[9px] text-emerald-600 block">Will be added to portal!</span>
+                  <span className="text-[9px] text-emerald-600 block">Will add to database</span>
                 </div>
 
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-center">
-                  <span className="text-[10px] font-bold text-blue-700 uppercase block">Existing Students</span>
+                  <span className="text-[10px] font-bold text-blue-700 uppercase block">Existing (Overwrite)</span>
                   <span className="text-xl font-black text-blue-800">
                     {assessmentResult.existingStudentsMatched.length}
                   </span>
-                  <span className="text-[9px] text-blue-600 block">Scores attached</span>
+                  <span className="text-[9px] text-blue-600 block">Will update/overwrite</span>
                 </div>
 
                 <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl text-center">
@@ -652,21 +657,30 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
                   <span className="text-xl font-black text-purple-800">
                     {assessmentResult.assessmentRecords.length}
                   </span>
-                  <span className="text-[9px] text-purple-600 block">Ranked &amp; Graded</span>
+                  <span className="text-[9px] text-purple-600 block">Add &amp; Overwrite</span>
                 </div>
               </div>
 
               {/* Informative Auto-Enroll Callout */}
-              {assessmentResult.newStudentsToEnroll.length > 0 && (
+              {(assessmentResult.newStudentsToEnroll.length > 0 || assessmentResult.existingStudentsMatched.length > 0) && (
                 <div className="p-3.5 bg-emerald-50/90 border border-emerald-200 rounded-xl text-xs text-emerald-950 space-y-1">
                   <div className="font-bold flex items-center space-x-1.5 text-emerald-900">
                     <Sparkles className="w-4 h-4 text-emerald-600" />
                     <span>
-                      {assessmentResult.newStudentsToEnroll.length} New Student(s) Will Be Automatically Enrolled:
+                      Automatic Add &amp; Overwrite Enabled:
                     </span>
                   </div>
                   <p className="text-[11px] text-emerald-800 leading-relaxed">
-                    These students were found in your sheet but not in the database. When you click &ldquo;Confirm &amp; Import&rdquo;, they will be automatically registered into your school roster as active students. You can complete their profile information (parents, phone, DOB, address) anytime later under <strong>Students</strong>.
+                    {assessmentResult.newStudentsToEnroll.length > 0 && (
+                      <span className="block mb-1">
+                        &bull; <strong>{assessmentResult.newStudentsToEnroll.length} new student(s)</strong> not in the portal will be automatically added and enrolled.
+                      </span>
+                    )}
+                    {assessmentResult.existingStudentsMatched.length > 0 && (
+                      <span className="block">
+                        &bull; <strong>{assessmentResult.existingStudentsMatched.length} existing student(s) and their assessments</strong> will be automatically updated and overwritten with the latest broadsheet scores.
+                      </span>
+                    )}
                   </p>
                 </div>
               )}
@@ -726,11 +740,11 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
                           <td className="py-2.5 px-3">
                             {isNewStudent ? (
                               <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                                <span>★ Auto-Enroll</span>
+                                <span>★ Auto-Enroll (New)</span>
                               </span>
                             ) : (
-                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700">
-                                <span>Existing Match</span>
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-800">
+                                <span>🔄 Overwrite (Match)</span>
                               </span>
                             )}
                           </td>
@@ -767,7 +781,7 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
                 >
                   <CheckCircle className="w-4 h-4" />
                   <span>
-                    Confirm &amp; Import Assessment Sheet (+{assessmentResult.newStudentsToEnroll.length} Auto-Enrolled)
+                    Confirm &amp; Import Assessment Sheet (+{assessmentResult.newStudentsToEnroll.length} Add, +{assessmentResult.existingStudentsMatched.length} Overwrite)
                   </span>
                 </button>
               </div>

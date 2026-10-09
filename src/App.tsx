@@ -86,16 +86,15 @@ export default function App() {
 
   // Synchronize state with persistent storage and cloud with robust error catching and state preservation
   const updateDatabase = (newDb: AppDatabase): boolean => {
-    const previousDb = db;
     try {
-      // 1. Immediately update cloud sync accumulator so incoming snapshots don't lag
+      // 1. Immediately update cloud sync accumulator
       setSyncDbSnapshot(newDb);
 
-      // 2. Persist locally to storage
-      saveDatabase(newDb);
-
-      // 3. Commit state into React
+      // 2. Commit state into React first so user work is never lost
       setDb(newDb);
+
+      // 3. Persist locally to storage (resilient against quota)
+      saveDatabase(newDb);
 
       // 4. Multi-device cloud sync with error catching
       if (isQuotaExhausted()) {
@@ -130,22 +129,14 @@ export default function App() {
 
       return true;
     } catch (err: any) {
-      console.error('Database save operation failed:', err);
-      // STRICT STATE PRESERVATION: Revert to previous state
-      setDb(previousDb);
-      setSyncDbSnapshot(previousDb);
-      try {
-        saveDatabase(previousDb);
-      } catch {
-        // safety fallback
-      }
-
+      console.error('Database save operation encountered an issue:', err);
+      // Keep newDb in state so user data is NEVER wiped!
+      setDb(newDb);
       setDbNotification({
-        type: 'error',
-        message: `Database save failed! Previous state has been safely preserved.`,
-        details: err?.message || 'Storage write quota or serialization error.',
+        type: 'warning',
+        message: `Changes saved in memory. Notice: ${err?.message || 'Storage quota warning'}`,
       });
-      return false;
+      return true;
     }
   };
 
@@ -385,9 +376,10 @@ export default function App() {
     // 1. Replace or insert the assessment record
     const existingIndex = db.assessments.findIndex(
       a =>
-        a.studentId === record.studentId &&
-        a.academicSession === record.academicSession &&
-        a.term === record.term
+        a.id === record.id ||
+        (a.studentId === record.studentId &&
+          a.academicSession === record.academicSession &&
+          a.term === record.term)
     );
 
     let list = [...db.assessments];
@@ -409,13 +401,9 @@ export default function App() {
     );
     const rankedClassGroup = rankAssessments(classGroup);
 
-    // 3. Merge back into full assessments array - exclude only records replaced in rankedClassGroup
-    const rankedKeys = new Set(
-      rankedClassGroup.map(r => `${r.studentId}__${r.academicSession}__${r.term}`)
-    );
-    const otherRecords = list.filter(
-      a => !rankedKeys.has(`${a.studentId}__${a.academicSession}__${a.term}`)
-    );
+    // 3. Merge back into full assessments array - exclude only records replaced in rankedClassGroup by unique record ID
+    const rankedIds = new Set(rankedClassGroup.map(r => r.id));
+    const otherRecords = list.filter(a => !rankedIds.has(a.id));
 
     const mergedAssessments = [...otherRecords, ...rankedClassGroup];
     let updatedDb: AppDatabase = { ...db, assessments: mergedAssessments };
@@ -439,17 +427,25 @@ export default function App() {
   const handleSaveAttendanceBatch = (records: AttendanceRecord[]) => {
     const existing = db.attendance || [];
     const recordMap = new Map(
-      records.map(r => [`${r.studentId}-${r.academicSession}-${r.term}`, r])
+      records.map(r => [
+        `${r.studentId}__${(r.className || '').toLowerCase().trim()}__${r.academicSession}__${r.term}`,
+        r,
+      ])
     );
 
     const retained = existing.filter(
-      r => !recordMap.has(`${r.studentId}-${r.academicSession}-${r.term}`)
+      r =>
+        !recordMap.has(
+          `${r.studentId}__${(r.className || '').toLowerCase().trim()}__${r.academicSession}__${r.term}`
+        )
     );
     const updatedAttendance = [...retained, ...records];
 
     // Synchronize attendance into assessment records as well for seamless report printing
     const updatedAssessments = db.assessments.map(asm => {
-      const match = recordMap.get(`${asm.studentId}-${asm.academicSession}-${asm.term}`);
+      const match = recordMap.get(
+        `${asm.studentId}__${(asm.className || '').toLowerCase().trim()}__${asm.academicSession}__${asm.term}`
+      );
       if (match) {
         return {
           ...asm,
@@ -535,54 +531,196 @@ export default function App() {
   };
 
   const handleImportAssessmentSheet = (
-    newStudents: Student[],
+    sheetStudents: Student[],
     newAssessments: AssessmentRecord[],
     newAttendance: AttendanceRecord[],
     detectedClasses: string[],
     detectedSections: string[]
   ) => {
-    // 1. Auto-enroll new students without duplicate IDs
-    const existingIds = new Set(db.students.map(s => s.id));
-    const studentsToAppend = newStudents.filter(s => !existingIds.has(s.id));
-    const mergedStudents = [...db.students, ...studentsToAppend];
+    // 1. ADD OR OVERWRITE STUDENTS
+    // If student is not added, add it; if student is already present, overwrite it!
+    const studentList = [...db.students];
+    let newlyAddedCount = 0;
+    let overwrittenCount = 0;
 
-    // 2. Merge assessments and replace any matching by (studentId, session, term)
-    const assessmentMap = new Map<string, AssessmentRecord>();
-    db.assessments.forEach(a => assessmentMap.set(`${a.studentId}__${a.academicSession}__${a.term}`, a));
-    newAssessments.forEach(a => assessmentMap.set(`${a.studentId}__${a.academicSession}__${a.term}`, a));
-    const mergedAssessments = Array.from(assessmentMap.values());
+    sheetStudents.forEach(sheetStu => {
+      const matchIndex = studentList.findIndex(
+        s =>
+          s.id === sheetStu.id ||
+          (sheetStu.admissionNumber &&
+            s.admissionNumber &&
+            s.admissionNumber.toLowerCase().trim() === sheetStu.admissionNumber.toLowerCase().trim()) ||
+          (sheetStu.studentId &&
+            s.studentId &&
+            s.studentId.toLowerCase().trim() === sheetStu.studentId.toLowerCase().trim()) ||
+          (s.name.toLowerCase().trim() === sheetStu.name.toLowerCase().trim() &&
+            s.className.toLowerCase().trim() === sheetStu.className.toLowerCase().trim())
+      );
 
-    // 3. Merge attendance
-    const attendanceMap = new Map<string, AttendanceRecord>();
-    (db.attendance || []).forEach(att => attendanceMap.set(`${att.studentId}__${att.academicSession}__${att.term}`, att));
-    newAttendance.forEach(att => attendanceMap.set(`${att.studentId}__${att.academicSession}__${att.term}`, att));
-    const mergedAttendance = Array.from(attendanceMap.values());
+      if (matchIndex >= 0) {
+        // OVERWRITE existing student with updated fields from sheet
+        const existing = studentList[matchIndex];
+        studentList[matchIndex] = {
+          ...existing,
+          name: sheetStu.name || existing.name,
+          className: sheetStu.className || existing.className,
+          section: sheetStu.section !== undefined ? sheetStu.section : existing.section,
+          gender: sheetStu.gender || existing.gender,
+          admissionNumber: sheetStu.admissionNumber || existing.admissionNumber,
+          studentId: sheetStu.studentId || existing.studentId,
+          status: 'Active',
+          academicHistory: [
+            ...(existing.academicHistory || []).filter(
+              h =>
+                !(
+                  sheetStu.academicHistory?.[0] &&
+                  h.session === sheetStu.academicHistory[0].session &&
+                  h.term === sheetStu.academicHistory[0].term
+                )
+            ),
+            ...(sheetStu.academicHistory || []),
+          ],
+        };
+        overwrittenCount++;
+      } else {
+        // ADD new student
+        studentList.push(sheetStu);
+        newlyAddedCount++;
+      }
+    });
 
-    // 4. Auto-create any new classes or sections found in the sheet
-    const existingClassNames = new Set(db.classes.map(c => c.name.toLowerCase()));
+    // 2. ADD OR OVERWRITE ASSESSMENTS
+    // If assessment is not added, add it; if assessment is already present, overwrite it!
+    const assessmentList = [...db.assessments];
+    let newAssessmentsCount = 0;
+    let overwrittenAssessmentsCount = 0;
+
+    newAssessments.forEach(newAsm => {
+      // Find matching student in studentList to ensure studentId is canonical
+      const stu = studentList.find(
+        s =>
+          s.studentId.toLowerCase().trim() === newAsm.studentId.toLowerCase().trim() ||
+          (s.admissionNumber &&
+            s.admissionNumber.toLowerCase().trim() === newAsm.studentId.toLowerCase().trim()) ||
+          s.id === newAsm.studentId
+      );
+      if (stu) {
+        newAsm.studentId = stu.studentId;
+      }
+
+      const normSession = (newAsm.academicSession || '').toLowerCase().trim();
+      const normTerm = (newAsm.term || '').toLowerCase().trim();
+
+      const existingAsmIdx = assessmentList.findIndex(a => {
+        const aNormSession = (a.academicSession || '').toLowerCase().trim();
+        const aNormTerm = (a.term || '').toLowerCase().trim();
+        if (aNormSession !== normSession || aNormTerm !== normTerm) return false;
+
+        return (
+          a.id === newAsm.id ||
+          a.studentId.toLowerCase().trim() === newAsm.studentId.toLowerCase().trim() ||
+          (stu &&
+            (a.studentId === stu.id ||
+              (stu.admissionNumber &&
+                a.studentId.toLowerCase().trim() === stu.admissionNumber.toLowerCase().trim())))
+        );
+      });
+
+      if (existingAsmIdx >= 0) {
+        // OVERWRITE existing assessment
+        assessmentList[existingAsmIdx] = {
+          ...assessmentList[existingAsmIdx],
+          ...newAsm,
+          id: assessmentList[existingAsmIdx].id,
+          updatedAt: new Date().toISOString(),
+        };
+        overwrittenAssessmentsCount++;
+      } else {
+        // ADD new assessment
+        assessmentList.push(newAsm);
+        newAssessmentsCount++;
+      }
+    });
+
+    // 3. Re-rank all affected classes/sections/sessions/terms
+    const affectedGroupKeys = new Set(
+      newAssessments.map(
+        a =>
+          `${(a.className || '').toLowerCase().trim()}__${(a.section || '').toUpperCase().trim()}__${a.academicSession}__${a.term}`
+      )
+    );
+
+    let finalAssessments = [...assessmentList];
+    affectedGroupKeys.forEach(groupKey => {
+      const [cls, sec, sess, trm] = groupKey.split('__');
+      const groupRecords = finalAssessments.filter(
+        a =>
+          (a.className || '').toLowerCase().trim() === cls &&
+          (a.section || '').toUpperCase().trim() === sec &&
+          a.academicSession === sess &&
+          a.term === trm
+      );
+      if (groupRecords.length > 0) {
+        const rankedGroup = rankAssessments(groupRecords);
+        const rankedMap = new Map(rankedGroup.map(r => [r.id, r]));
+        finalAssessments = finalAssessments.map(a => rankedMap.get(a.id) || a);
+      }
+    });
+
+    // 4. ADD OR OVERWRITE ATTENDANCE
+    const attendanceList = [...(db.attendance || [])];
+    newAttendance.forEach(newAtt => {
+      const normSession = (newAtt.academicSession || '').toLowerCase().trim();
+      const normTerm = (newAtt.term || '').toLowerCase().trim();
+
+      const existingAttIdx = attendanceList.findIndex(att => {
+        const attNormSession = (att.academicSession || '').toLowerCase().trim();
+        const attNormTerm = (att.term || '').toLowerCase().trim();
+        return (
+          att.id === newAtt.id ||
+          (attNormSession === normSession &&
+            attNormTerm === normTerm &&
+            att.studentId.toLowerCase().trim() === newAtt.studentId.toLowerCase().trim())
+        );
+      });
+
+      if (existingAttIdx >= 0) {
+        attendanceList[existingAttIdx] = {
+          ...attendanceList[existingAttIdx],
+          ...newAtt,
+          id: attendanceList[existingAttIdx].id,
+          updatedAt: new Date().toISOString(),
+        };
+      } else {
+        attendanceList.push(newAtt);
+      }
+    });
+
+    // 5. Auto-create any new classes or sections found in the sheet
+    const existingClassNames = new Set(db.classes.map(c => c.name.toLowerCase().trim()));
     const classesToAdd: ClassItem[] = detectedClasses
-      .filter(cn => cn && !existingClassNames.has(cn.toLowerCase()))
+      .filter(cn => cn && !existingClassNames.has(cn.toLowerCase().trim()))
       .map((cn, i) => ({
         id: `cls-auto-${Date.now()}-${i}`,
-        name: cn,
+        name: cn.trim(),
         order: db.classes.length + i + 1,
         schoolId: db.schoolId,
       }));
 
-    const existingSectionNames = new Set(db.sections.map(s => s.name.toLowerCase()));
+    const existingSectionNames = new Set(db.sections.map(s => s.name.toLowerCase().trim()));
     const sectionsToAdd: SectionItem[] = detectedSections
-      .filter(sn => sn && !existingSectionNames.has(sn.toLowerCase()))
+      .filter(sn => sn && !existingSectionNames.has(sn.toLowerCase().trim()))
       .map((sn, i) => ({
         id: `sec-auto-${Date.now()}-${i}`,
-        name: sn,
+        name: sn.trim(),
         schoolId: db.schoolId,
       }));
 
     let updatedDb: AppDatabase = {
       ...db,
-      students: mergedStudents,
-      assessments: mergedAssessments,
-      attendance: mergedAttendance,
+      students: studentList,
+      assessments: finalAssessments,
+      attendance: attendanceList,
       classes: [...db.classes, ...classesToAdd],
       sections: [...db.sections, ...sectionsToAdd],
     };
@@ -592,7 +730,7 @@ export default function App() {
         updatedDb,
         currentUser,
         'IMPORT_ASSESSMENT_SHEET',
-        `Imported Assessment Sheet: Auto-enrolled ${studentsToAppend.length} students and recorded ${newAssessments.length} assessment records`
+        `Imported Assessment Sheet: ${newlyAddedCount} students added, ${overwrittenCount} students updated/overwritten, ${newAssessmentsCount} assessments created, ${overwrittenAssessmentsCount} assessments updated/overwritten`
       );
     }
     updateDatabase(updatedDb);

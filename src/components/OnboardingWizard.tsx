@@ -382,6 +382,50 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({
                     placeholder="attahfizul.itqan@gmail.com"
                   />
                 </div>
+
+                {/* Head Teacher / Headmaster Name setting */}
+                <div className="sm:col-span-2 bg-purple-50/70 border border-purple-200 rounded-xl p-3.5 space-y-2">
+                  <label className="block text-xs font-bold text-purple-900 uppercase mb-1">
+                    Head Teacher / Headmaster Name (Appears on Student Report Sheets)
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.headTeacherName || ''}
+                    onChange={e => setSettings({ ...settings, headTeacherName: e.target.value })}
+                    className="w-full text-xs font-semibold border border-purple-300 rounded-lg p-2.5 bg-white focus:ring-1 focus:ring-purple-600"
+                    placeholder="e.g. Ustaz Al-Amin Kaigama"
+                  />
+                  <p className="text-[11px] text-purple-700">
+                    This Headmaster name will be printed with stamp/signature at the bottom of all student term report sheets.
+                  </p>
+                </div>
+
+                {/* Class / Form Teachers Assignment */}
+                <div className="sm:col-span-2 bg-blue-50/50 border border-blue-200 rounded-xl p-3.5 space-y-2">
+                  <span className="text-xs font-bold text-blue-900 uppercase block">
+                    Class / Form Teachers (Report Sheets)
+                  </span>
+                  <p className="text-[11px] text-blue-700">
+                    Assign a form teacher to each class. Their name will appear on student term report sheets alongside the Headmaster name.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                    {createdClasses.map(cls => (
+                      <div key={cls.id} className="flex items-center space-x-2 bg-white p-2 rounded-lg border border-slate-200 text-xs">
+                        <span className="font-semibold text-slate-800 w-28 truncate">{cls.name}:</span>
+                        <input
+                          type="text"
+                          value={cls.classTeacherName || ''}
+                          onChange={e => {
+                            const val = e.target.value;
+                            setCreatedClasses(prev => prev.map(c => c.id === cls.id ? { ...c, classTeacherName: val } : c));
+                          }}
+                          placeholder="e.g. Mal. Ibrahim"
+                          className="flex-1 text-xs border border-slate-300 rounded px-2 py-1"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           )}

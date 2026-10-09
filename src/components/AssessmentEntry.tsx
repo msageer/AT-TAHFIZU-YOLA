@@ -204,15 +204,20 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
 
   const handleConfirmSheetImport = () => {
     if (!sheetImportResult || !onImportAssessmentSheet) return;
+    const studentsToPass =
+      sheetImportResult.allStudents && sheetImportResult.allStudents.length > 0
+        ? sheetImportResult.allStudents
+        : [...sheetImportResult.newStudentsToEnroll, ...sheetImportResult.existingStudentsMatched];
+
     onImportAssessmentSheet(
-      sheetImportResult.newStudentsToEnroll,
+      studentsToPass,
       sheetImportResult.assessmentRecords,
       sheetImportResult.attendanceRecords,
       sheetImportResult.detectedClasses,
       sheetImportResult.detectedSections
     );
     setNotification({
-      text: `Imported successfully! Auto-enrolled ${sheetImportResult.newStudentsToEnroll.length} new student(s) and recorded ${sheetImportResult.assessmentRecords.length} assessments.`,
+      text: `Imported successfully! Added ${sheetImportResult.newStudentsToEnroll.length} new student(s), updated/overwritten ${sheetImportResult.existingStudentsMatched.length} existing student(s), and saved ${sheetImportResult.assessmentRecords.length} assessments.`,
       type: 'success',
     });
     setSheetImportResult(null);
@@ -1277,11 +1282,11 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
                         <td className="py-2 px-3">
                           {isNew ? (
                             <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                              <span>★ Auto-Enroll</span>
+                              <span>★ Auto-Enroll (New)</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700">
-                              <span>Existing</span>
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-800">
+                              <span>🔄 Overwrite (Match)</span>
                             </span>
                           )}
                         </td>
@@ -1315,7 +1320,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
               >
                 <CheckCircle className="w-4 h-4" />
                 <span>
-                  Confirm &amp; Import (+{sheetImportResult.newStudentsToEnroll.length} Students Auto-Enrolled)
+                  Confirm &amp; Import (+{sheetImportResult.newStudentsToEnroll.length} Add, +{sheetImportResult.existingStudentsMatched.length} Overwrite)
                 </span>
               </button>
             </div>
