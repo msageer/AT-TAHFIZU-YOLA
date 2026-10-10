@@ -2,6 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Student, AppDatabase, NavigationTab, UserAccount } from '../types';
 import { ConfirmModal } from './ConfirmModal';
 import { getSectionsForClass, formatClassWithSection } from '../utils/classSections';
+import { matchCanonicalClass } from '../utils/excel';
+import {
+  findDuplicateStudentGroups,
+  DeduplicationResult,
+  DuplicateStudentGroup,
+} from '../utils/studentDeduplication';
 import {
   Search,
   Plus,
@@ -16,7 +22,14 @@ import {
   MapPin,
   Calendar,
   AlertCircle,
+  AlertTriangle,
   Lock,
+  Hash,
+  Sparkles,
+  CheckCircle2,
+  Copy,
+  ListFilter,
+  CheckSquare,
 } from 'lucide-react';
 
 interface StudentsProps {
@@ -27,6 +40,7 @@ interface StudentsProps {
   onSaveStudent: (student: Student) => void;
   onDeleteStudent: (studentId: string) => void;
   onBatchDeleteStudents?: (studentIds: string[]) => void;
+  onAutoCleanDuplicates?: () => DeduplicationResult;
   setActiveTab: (tab: NavigationTab) => void;
   onSelectAssessmentStudent: (studentId: string, className: string, section: string) => void;
   onSelectReportStudent: (studentId: string) => void;
@@ -40,6 +54,7 @@ export const Students: React.FC<StudentsProps> = ({
   onSaveStudent,
   onDeleteStudent,
   onBatchDeleteStudents,
+  onAutoCleanDuplicates,
   setActiveTab,
   onSelectAssessmentStudent,
   onSelectReportStudent,
@@ -57,6 +72,14 @@ export const Students: React.FC<StudentsProps> = ({
 
   // Multi-selection state for batch actions
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+
+  // Selection Numbers Modal & Filter State
+  const [isNumberDeleteModalOpen, setIsNumberDeleteModalOpen] = useState(false);
+  const [numberInputString, setNumberInputString] = useState('');
+
+  // Duplicate Records Management State
+  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+  const [duplicateNotice, setDuplicateNotice] = useState<string | null>(null);
 
   // Modal State
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -110,9 +133,16 @@ export const Students: React.FC<StudentsProps> = ({
 
   // Filter students
   const filteredStudents = db.students.filter(student => {
+    const isClassMatch = (targetClass: string) => {
+      if ((student.className || '').toLowerCase().trim() === targetClass.toLowerCase().trim()) return true;
+      const { className: canon1 } = matchCanonicalClass(student.className || '', db.classes);
+      const { className: canon2 } = matchCanonicalClass(targetClass, db.classes);
+      return canon1.toLowerCase().trim() === canon2.toLowerCase().trim();
+    };
+
     // If teacher, strictly enforce their assigned class
-    if (isTeacher && teacherClass && student.className !== teacherClass) return false;
-    if (isTeacher && teacherSection && student.section !== teacherSection) return false;
+    if (isTeacher && teacherClass && !isClassMatch(teacherClass)) return false;
+    if (isTeacher && teacherSection && (student.section || '').toUpperCase().trim() !== teacherSection.toUpperCase().trim()) return false;
 
     // Search query
     const q = searchTerm.toLowerCase().trim();
@@ -125,10 +155,10 @@ export const Students: React.FC<StudentsProps> = ({
       if (!matchName && !matchId && !matchAdm && !matchParent && !matchPhone) return false;
     }
 
-    if (!isTeacher && filterClass !== 'ALL' && student.className !== filterClass) return false;
+    if (!isTeacher && filterClass !== 'ALL' && !isClassMatch(filterClass)) return false;
     if (!isTeacher && filterSection !== 'ALL') {
       const clsArms = getSectionsForClass(student.className, db.classes, db.sections);
-      if (clsArms.length > 0 && student.section !== filterSection) return false;
+      if (clsArms.length > 0 && (student.section || '').toUpperCase().trim() !== filterSection.toUpperCase().trim()) return false;
     }
     if (filterGender !== 'ALL' && student.gender !== filterGender) return false;
     if (filterStatus !== 'ALL' && student.status !== filterStatus) return false;
@@ -329,6 +359,124 @@ export const Students: React.FC<StudentsProps> = ({
     );
   };
 
+  // ==========================================
+  // DUPLICATE STUDENT DETECTION & ACTIONS
+  // ==========================================
+  const duplicateGroups = findDuplicateStudentGroups(db.students);
+  const totalDuplicatesCount = duplicateGroups.reduce(
+    (acc, g) => acc + (g.students.length - 1),
+    0
+  );
+
+  // Selection numbers helper: parse inputs like "1, 3, 5-8, 12" into valid 1-based indices
+  const parseSelectionNumbers = (input: string, maxCount: number): number[] => {
+    if (!input.trim() || maxCount <= 0) return [];
+    const parts = input.split(/[,;\s]+/).map(p => p.trim().replace(/^#/, '')).filter(Boolean);
+    const result = new Set<number>();
+
+    for (const part of parts) {
+      if (part.includes('-')) {
+        const [startStr, endStr] = part.split('-');
+        const start = parseInt(startStr, 10);
+        const end = parseInt(endStr, 10);
+        if (!isNaN(start) && !isNaN(end)) {
+          const min = Math.max(1, Math.min(start, end));
+          const max = Math.min(maxCount, Math.max(start, end));
+          for (let i = min; i <= max; i++) {
+            result.add(i);
+          }
+        }
+      } else {
+        const num = parseInt(part, 10);
+        if (!isNaN(num) && num >= 1 && num <= maxCount) {
+          result.add(num);
+        }
+      }
+    }
+
+    return Array.from(result).sort((a, b) => a - b);
+  };
+
+  const parsedSelectionNumbers = parseSelectionNumbers(numberInputString, filteredStudents.length);
+  const matchedSelectionStudents = parsedSelectionNumbers
+    .map(num => ({
+      number: num,
+      student: filteredStudents[num - 1],
+    }))
+    .filter(item => Boolean(item.student));
+
+  const selectedStudentNumbers = filteredStudents
+    .map((s, idx) => (selectedStudentIds.includes(s.id) ? idx + 1 : null))
+    .filter((n): n is number => n !== null);
+
+  // Apply selection numbers to table checkbox selection
+  const handleApplySelectionNumbersToTable = () => {
+    const studentIds = matchedSelectionStudents.map(m => m.student.id);
+    if (studentIds.length === 0) return;
+    setSelectedStudentIds(prev => Array.from(new Set([...prev, ...studentIds])));
+    setIsNumberDeleteModalOpen(false);
+  };
+
+  // Directly trigger delete for the parsed selection numbers
+  const handleDeleteParsedNumbersClick = () => {
+    if (matchedSelectionStudents.length === 0) return;
+    const targetIds = matchedSelectionStudents.map(m => m.student.id);
+    const targetNumbers = matchedSelectionStudents.map(m => `#${m.number}`).join(', ');
+    const previewNames = matchedSelectionStudents.slice(0, 5).map(m => m.student.name).join(', ');
+    const moreSuffix = matchedSelectionStudents.length > 5 ? ` +${matchedSelectionStudents.length - 5} more` : '';
+
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Deletion by Selection Numbers',
+      message: `Are you sure you want to permanently delete the ${matchedSelectionStudents.length} student(s) matching selection numbers (${targetNumbers})? All associated assessment marks and attendance history will also be permanently deleted. Do you want to proceed?`,
+      details: `Target Selection Numbers: ${targetNumbers} • Students: ${previewNames}${moreSuffix}`,
+      variant: 'danger',
+      confirmText: `Yes, Delete ${matchedSelectionStudents.length} Students`,
+      cancelText: 'Cancel',
+      onConfirm: () => {
+        if (onBatchDeleteStudents) {
+          onBatchDeleteStudents(targetIds);
+        } else {
+          targetIds.forEach(id => onDeleteStudent(id));
+        }
+        setSelectedStudentIds(prev => prev.filter(id => !targetIds.includes(id)));
+        setNumberInputString('');
+        setIsNumberDeleteModalOpen(false);
+        setConfirmModalConfig(null);
+      },
+    });
+  };
+
+  // Handle Automatic Deduplication trigger
+  const handleTriggerAutoCleanDuplicates = () => {
+    if (totalDuplicatesCount === 0) {
+      setDuplicateNotice('No duplicate students found! All records are unique and consistent.');
+      setTimeout(() => setDuplicateNotice(null), 4000);
+      return;
+    }
+
+    setConfirmModalConfig({
+      isOpen: true,
+      title: 'Confirm Automatic Duplicate Cleanup',
+      message: `Are you sure you want to clean up duplicate students? The system will keep 1 consolidated canonical record for each student, safely merge all assessment marks and attendance histories, and permanently delete the ${totalDuplicatesCount} redundant duplicate copies.`,
+      details: `Total Duplicate Groups: ${duplicateGroups.length} • Redundant Records to Delete: ${totalDuplicatesCount}`,
+      variant: 'danger',
+      confirmText: `Yes, Delete Duplicates & Leave One`,
+      cancelText: 'Cancel',
+      onConfirm: () => {
+        if (onAutoCleanDuplicates) {
+          const res = onAutoCleanDuplicates();
+          setDuplicateNotice(
+            `Successfully cleaned ${res.removedStudentCount} duplicate student(s)! Kept 1 canonical profile per student.`
+          );
+          setTimeout(() => setDuplicateNotice(null), 5000);
+        }
+        setIsDuplicateModalOpen(false);
+        setConfirmModalConfig(null);
+      },
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header & Action */}
@@ -340,7 +488,39 @@ export const Students: React.FC<StudentsProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Clean Duplicates Button */}
+          <button
+            onClick={() => setIsDuplicateModalOpen(true)}
+            className={`text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5 border shadow-2xs ${
+              totalDuplicatesCount > 0
+                ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+            }`}
+            title="Scan and clean duplicate student records"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${totalDuplicatesCount > 0 ? 'text-amber-600' : 'text-slate-500'}`} />
+            <span>Clean Duplicates</span>
+            {totalDuplicatesCount > 0 && (
+              <span className="bg-amber-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full ml-0.5">
+                {totalDuplicatesCount}
+              </span>
+            )}
+          </button>
+
+          {/* Delete by Numbers Button */}
+          <button
+            onClick={() => {
+              setNumberInputString('');
+              setIsNumberDeleteModalOpen(true);
+            }}
+            className="bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5 border border-slate-200 shadow-2xs"
+            title="Delete students by their list row numbers (S/N)"
+          >
+            <Hash className="w-3.5 h-3.5 text-slate-600" />
+            <span>Delete by Numbers</span>
+          </button>
+
           <button
             onClick={() => setActiveTab('import-export')}
             className="bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold px-3 py-2 rounded-lg transition"
@@ -460,6 +640,56 @@ export const Students: React.FC<StudentsProps> = ({
         </div>
       </div>
 
+      {/* Duplicate Action Status Notification Toast */}
+      {duplicateNotice && (
+        <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-4 py-3 rounded-xl text-xs font-semibold flex items-center justify-between shadow-xs animate-in fade-in">
+          <div className="flex items-center space-x-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <span>{duplicateNotice}</span>
+          </div>
+          <button
+            onClick={() => setDuplicateNotice(null)}
+            className="text-emerald-700 hover:text-emerald-900 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Prominent Duplicate Records Detection Alert Banner */}
+      {totalDuplicatesCount > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs animate-in fade-in">
+          <div className="flex items-start space-x-3">
+            <div className="p-2 bg-amber-100 rounded-lg text-amber-700 flex-shrink-0">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-amber-900">
+                {totalDuplicatesCount} Duplicate Student Record{totalDuplicatesCount > 1 ? 's' : ''} Detected in Registry
+              </h4>
+              <p className="text-xs text-amber-700 mt-0.5">
+                {duplicateGroups.length} student group{duplicateGroups.length > 1 ? 's' : ''} share identical student IDs, admission numbers, or names &amp; classes. Automatically delete duplicate copies and leave exactly one canonical record per student.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2 flex-shrink-0">
+            <button
+              onClick={() => setIsDuplicateModalOpen(true)}
+              className="px-3 py-1.5 text-xs font-semibold bg-white border border-amber-300 text-amber-800 rounded-lg hover:bg-amber-100 transition shadow-2xs"
+            >
+              Review Duplicates ({duplicateGroups.length})
+            </button>
+            <button
+              onClick={handleTriggerAutoCleanDuplicates}
+              className="px-3.5 py-1.5 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition shadow-xs flex items-center space-x-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Delete Duplicates &amp; Leave One</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Multi-Selection Batch Actions Toolbar */}
       {selectedStudentIds.length > 0 && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-sm animate-in fade-in">
@@ -469,6 +699,12 @@ export const Students: React.FC<StudentsProps> = ({
             </span>
             <span>
               {selectedStudentIds.length} student{selectedStudentIds.length > 1 ? 's' : ''} selected
+              {selectedStudentNumbers.length > 0 && (
+                <span className="text-red-700 ml-1.5 font-mono text-[11px] font-normal">
+                  (S/N: #{selectedStudentNumbers.slice(0, 10).join(', #')}
+                  {selectedStudentNumbers.length > 10 ? ` +${selectedStudentNumbers.length - 10} more` : ''})
+                </span>
+              )}
             </span>
           </div>
 
@@ -478,6 +714,13 @@ export const Students: React.FC<StudentsProps> = ({
               className="px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg transition"
             >
               Deselect All
+            </button>
+            <button
+              onClick={() => setIsNumberDeleteModalOpen(true)}
+              className="px-3 py-1.5 text-xs font-semibold bg-white border border-red-200 hover:bg-red-100 text-red-800 rounded-lg transition flex items-center space-x-1"
+            >
+              <Hash className="w-3.5 h-3.5" />
+              <span>Adjust by Numbers</span>
             </button>
             <button
               onClick={handleBatchDeleteClick}
@@ -508,6 +751,7 @@ export const Students: React.FC<StudentsProps> = ({
                     className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
                   />
                 </th>
+                <th className="py-3 px-2 w-12 text-center text-slate-500 font-bold"># S/N</th>
                 <th className="py-3 px-4">Student ID / Adm</th>
                 <th className="py-3 px-4">Student Name</th>
                 <th className="py-3 px-4">Class &amp; Arm</th>
@@ -520,15 +764,16 @@ export const Students: React.FC<StudentsProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredStudents.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     <UserCheck className="w-10 h-10 mx-auto mb-2 text-slate-300" />
                     <p className="font-semibold text-slate-600">No students match your filter criteria.</p>
                     <p className="text-xs text-slate-400 mt-1">Try clearing filters or add a new student.</p>
                   </td>
                 </tr>
               ) : (
-                filteredStudents.map(student => {
+                filteredStudents.map((student, index) => {
                   const isSelected = selectedStudentIds.includes(student.id);
+                  const sNumber = index + 1;
                   return (
                     <tr
                       key={student.id}
@@ -551,6 +796,10 @@ export const Students: React.FC<StudentsProps> = ({
                           aria-label={`Select student ${student.name}`}
                           className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
                         />
+                      </td>
+
+                      <td className="py-3 px-2 text-center font-mono font-bold text-xs text-slate-500">
+                        #{sNumber}
                       </td>
 
                       <td className="py-3 px-4 font-mono text-xs">
@@ -1113,6 +1362,378 @@ export const Students: React.FC<StudentsProps> = ({
                   <span>View Report</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL 1: DELETE BY SELECTION NUMBERS                      */}
+      {/* ========================================================= */}
+      {isNumberDeleteModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in"
+          onClick={e => {
+            if (e.target === e.currentTarget) setIsNumberDeleteModalOpen(false);
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full p-6 border border-slate-200 relative animate-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <button
+              onClick={() => setIsNumberDeleteModalOpen(false)}
+              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-lg transition"
+              aria-label="Close modal"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2.5 bg-red-100 text-red-700 rounded-xl">
+                <Hash className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Delete Students by Selection Numbers (S/N)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Enter student list numbers or ranges to select and permanently delete them
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4 overflow-y-auto pr-1 flex-1">
+              {/* Quick Preset Range Buttons */}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1.5">
+                  Quick Select Presets
+                </label>
+                <div className="flex flex-wrap gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNumberInputString(
+                        filteredStudents.length >= 10 ? '1-10' : `1-${filteredStudents.length}`
+                      )
+                    }
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md font-semibold transition"
+                  >
+                    Numbers 1-10
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNumberInputString(
+                        filteredStudents.length >= 25 ? '1-25' : `1-${filteredStudents.length}`
+                      )
+                    }
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md font-semibold transition"
+                  >
+                    Numbers 1-25
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNumberInputString(
+                        filteredStudents.length >= 50 ? '1-50' : `1-${filteredStudents.length}`
+                      )
+                    }
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md font-semibold transition"
+                  >
+                    Numbers 1-50
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNumberInputString(`1-${filteredStudents.length}`)}
+                    className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md font-semibold transition"
+                  >
+                    All ({filteredStudents.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNumberInputString('')}
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-md font-medium transition"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Number Input Field */}
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
+                  Enter Selection Numbers or Ranges
+                </label>
+                <input
+                  type="text"
+                  value={numberInputString}
+                  onChange={e => setNumberInputString(e.target.value)}
+                  placeholder="e.g. 2, 4, 7-10, 15, 22"
+                  className="w-full text-sm font-mono border border-slate-300 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-red-500"
+                  autoFocus
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Separate single numbers with commas (e.g. <span className="font-mono">1, 4, 9</span>) or use a hyphen for ranges (e.g. <span className="font-mono">5-12</span>). Valid numbers: 1 to {filteredStudents.length}.
+                </p>
+              </div>
+
+              {/* Interactive S/N Chip Cloud (First 60 students) */}
+              {filteredStudents.length > 0 && (
+                <div>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1.5">
+                    Click to Toggle S/N (Showing up to {Math.min(filteredStudents.length, 60)} students)
+                  </label>
+                  <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-2 bg-slate-50 rounded-lg border border-slate-200">
+                    {filteredStudents.slice(0, 60).map((stu, i) => {
+                      const num = i + 1;
+                      const isPicked = parsedSelectionNumbers.includes(num);
+                      return (
+                        <button
+                          key={stu.id}
+                          type="button"
+                          onClick={() => {
+                            const current = new Set(parsedSelectionNumbers);
+                            if (current.has(num)) {
+                              current.delete(num);
+                            } else {
+                              current.add(num);
+                            }
+                            setNumberInputString(Array.from(current).sort((a, b) => a - b).join(', '));
+                          }}
+                          className={`px-2 py-0.5 rounded text-xs font-mono font-bold transition ${
+                            isPicked
+                              ? 'bg-red-600 text-white shadow-xs'
+                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                          }`}
+                          title={`#${num}: ${stu.name}`}
+                        >
+                          #{num}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Matched Students Live Preview */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-slate-800">
+                    Matched Students to Delete ({matchedSelectionStudents.length}):
+                  </span>
+                  {matchedSelectionStudents.length > 0 && (
+                    <span className="text-xs text-red-700 font-mono font-semibold">
+                      #{parsedSelectionNumbers.slice(0, 8).join(', #')}
+                      {parsedSelectionNumbers.length > 8 ? ` +${parsedSelectionNumbers.length - 8} more` : ''}
+                    </span>
+                  )}
+                </div>
+
+                {matchedSelectionStudents.length === 0 ? (
+                  <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 text-center text-xs text-slate-500 italic">
+                    Type selection numbers above (e.g. 1, 3, 5-8) or click numbers to preview matching students.
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                    {matchedSelectionStudents.map(item => (
+                      <div
+                        key={item.student.id}
+                        className="flex items-center justify-between p-2 rounded-lg bg-red-50/60 border border-red-200 text-xs"
+                      >
+                        <div className="flex items-center space-x-2">
+                          <span className="w-8 h-6 rounded bg-red-600 text-white font-mono font-bold text-xs flex items-center justify-center">
+                            #{item.number}
+                          </span>
+                          <div>
+                            <div className="font-bold text-slate-900">{item.student.name}</div>
+                            <div className="text-[11px] text-slate-500 font-mono">
+                              {item.student.studentId} &bull; {item.student.admissionNumber}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[11px] font-semibold text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
+                          {item.student.className} ({item.student.section})
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="mt-4 pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setIsNumberDeleteModalOpen(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+              >
+                Cancel
+              </button>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleApplySelectionNumbersToTable}
+                  disabled={matchedSelectionStudents.length === 0}
+                  className="px-3.5 py-2 text-xs font-semibold bg-white border border-slate-300 text-slate-800 hover:bg-slate-50 rounded-lg transition disabled:opacity-50"
+                >
+                  Select in Table ({matchedSelectionStudents.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteParsedNumbersClick}
+                  disabled={matchedSelectionStudents.length === 0}
+                  className="px-4 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-lg transition flex items-center space-x-1.5 shadow-xs disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Selected Numbers ({matchedSelectionStudents.length})</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL 2: DUPLICATE STUDENT RECORDS CLEANUP                */}
+      {/* ========================================================= */}
+      {isDuplicateModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in"
+          onClick={e => {
+            if (e.target === e.currentTarget) setIsDuplicateModalOpen(false);
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 border border-slate-200 relative animate-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            <button
+              onClick={() => setIsDuplicateModalOpen(false)}
+              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-lg transition"
+              aria-label="Close modal"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2.5 bg-amber-100 text-amber-700 rounded-xl">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  Duplicate Student Records Cleanup &amp; Consolidation
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Consolidate duplicate copies into exactly 1 canonical record without losing assessment marks or attendance
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4 overflow-y-auto pr-1 flex-1">
+              {totalDuplicatesCount === 0 ? (
+                <div className="p-8 text-center bg-emerald-50/60 border border-emerald-200 rounded-xl">
+                  <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto mb-2" />
+                  <h4 className="text-sm font-bold text-emerald-950">
+                    No Duplicate Students Found!
+                  </h4>
+                  <p className="text-xs text-emerald-800 mt-1 max-w-md mx-auto">
+                    All {db.students.length} students currently registered in your database have unique Student IDs, Admission Numbers, and names.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                    <p className="font-semibold">
+                      Found {totalDuplicatesCount} duplicate record{totalDuplicatesCount > 1 ? 's' : ''} across {duplicateGroups.length} duplicate group{duplicateGroups.length > 1 ? 's' : ''}.
+                    </p>
+                    <p className="text-amber-800 text-[11px] mt-1">
+                      When you click <strong>"Automatically Delete Duplicates &amp; Leave One"</strong>, the system will keep 1 canonical profile for each student, safely merge all terminal assessment marks, exam scores, and attendance records, and permanently remove the redundant duplicate copies.
+                    </p>
+                  </div>
+
+                  {/* List of Duplicate Groups */}
+                  <div className="space-y-3">
+                    {duplicateGroups.map((group, gIdx) => {
+                      const canonical = group.students[0];
+                      const duplicates = group.students.slice(1);
+                      return (
+                        <div
+                          key={group.key || gIdx}
+                          className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-bold text-slate-800 flex items-center space-x-1.5">
+                              <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] font-bold">
+                                {gIdx + 1}
+                              </span>
+                              <span>Group: {group.students[0].name}</span>
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-900 border border-amber-200 uppercase">
+                              {group.reason.replace(/_/g, ' ')}
+                            </span>
+                          </div>
+
+                          {/* Canonical Record to Keep */}
+                          <div className="p-2.5 rounded-lg bg-emerald-50/80 border border-emerald-200 text-xs flex items-center justify-between">
+                            <div>
+                              <div className="flex items-center space-x-1.5">
+                                <span className="font-bold text-emerald-950">{canonical.name}</span>
+                                <span className="text-[10px] bg-emerald-200 text-emerald-900 font-bold px-1.5 py-0.2 rounded">
+                                  Canonical (Keep)
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-emerald-800 font-mono mt-0.5">
+                                ID: {canonical.studentId} &bull; Adm: {canonical.admissionNumber} &bull; {canonical.className} ({canonical.section})
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Redundant Copies to Remove */}
+                          <div className="space-y-1 pl-2">
+                            {duplicates.map((dup, dIdx) => (
+                              <div
+                                key={dup.id || dIdx}
+                                className="p-2 rounded-lg bg-red-50/70 border border-red-200 text-xs flex items-center justify-between"
+                              >
+                                <div>
+                                  <div className="flex items-center space-x-1.5">
+                                    <span className="font-semibold text-slate-800">{dup.name}</span>
+                                    <span className="text-[10px] bg-red-200 text-red-900 font-bold px-1.5 py-0.2 rounded">
+                                      Duplicate (Consolidate &amp; Delete)
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                                    ID: {dup.studentId} &bull; Adm: {dup.admissionNumber} &bull; {dup.className} ({dup.section})
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Modal Actions */}
+            <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setIsDuplicateModalOpen(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+              >
+                Close
+              </button>
+
+              {totalDuplicatesCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleTriggerAutoCleanDuplicates}
+                  className="px-4 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition flex items-center space-x-1.5 shadow-xs"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Delete Duplicates &amp; Leave One</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

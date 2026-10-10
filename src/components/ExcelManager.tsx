@@ -114,7 +114,9 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
         file,
         db,
         assessmentSession,
-        assessmentTerm
+        assessmentTerm,
+        assessmentTemplateClass || undefined,
+        assessmentTemplateSection || undefined
       );
       setAssessmentResult(result);
 
@@ -1028,14 +1030,18 @@ export const ExcelManager: React.FC<ExcelManagerProps> = ({
               </div>
 
               {/* Action */}
-              <div className="pt-2 flex justify-end">
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-100">
+                <div className="text-xs text-slate-600 flex items-center space-x-1.5">
+                  <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                  <span>Existing matching students will be updated &amp; overwritten (no duplicate records).</span>
+                </div>
                 <button
                   onClick={handleConfirmStudentImport}
                   disabled={validationResult.validStudents.length === 0}
                   className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2.5 px-6 rounded-lg transition shadow flex items-center space-x-2 disabled:opacity-50"
                 >
                   <CheckCircle className="w-4 h-4" />
-                  <span>Import {validationResult.validStudents.length} Valid Student Records</span>
+                  <span>Import &amp; Overwrite {validationResult.validStudents.length} Students</span>
                 </button>
               </div>
             </div>

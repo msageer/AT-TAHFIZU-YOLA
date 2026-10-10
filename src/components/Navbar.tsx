@@ -150,7 +150,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
     {
       id: 'classes',
-      label: isTeacher ? 'My Class' : 'Classes',
+      label: isTeacher ? 'My Class & Broadsheet' : 'Classes & Broadsheet',
       icon: GraduationCap,
       allowed:
         isSuperAdmin ||
@@ -177,21 +177,12 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
     {
       id: 'reports',
-      label: 'Reports',
+      label: 'Reports & Broadsheet',
       icon: FileText,
       allowed:
         isSuperAdmin ||
         isTeacher ||
         (isStaff && (currentUser.permissions?.includes('reports') ?? true)),
-    },
-    {
-      id: 'class-summary',
-      label: 'Class Summary',
-      icon: TableProperties,
-      allowed:
-        isSuperAdmin ||
-        isTeacher ||
-        (isStaff && (currentUser.permissions?.includes('class-summary') ?? true)),
     },
     {
       id: 'promotion',

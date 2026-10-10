@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   AppDatabase,
   AssessmentRecord,
@@ -12,6 +12,7 @@ import { calculateGrade, rankAssessments } from '../utils/ranking';
 import {
   downloadAssessmentSheetTemplate,
   parseAndValidateAssessmentSpreadsheet,
+  matchCanonicalClass,
   AssessmentSheetImportResult,
 } from '../utils/excel';
 import { ConfirmModal } from './ConfirmModal';
@@ -92,31 +93,44 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
     hasSections
       ? (isTeacher && teacherSection
           ? teacherSection
-          : (initialSection && classSections.includes(initialSection)
+          : (initialSection && (classSections.includes(initialSection) || initialSection === 'ALL')
               ? initialSection
-              : (classSections[0] || 'A')))
+              : 'ALL'))
       : ''
   );
 
   // Synchronize section if current section is not valid for this class
   useEffect(() => {
     if (hasSections) {
-      if (!classSections.includes(section)) {
-        setSection(classSections[0] || 'A');
+      if (section !== 'ALL' && !classSections.includes(section)) {
+        setSection('ALL');
       }
     } else {
       setSection('');
     }
   }, [className, classSections, hasSections]);
 
-  // Available students in current class and section (if no sections, all students in class)
-  const eligibleStudents = db.students.filter(s => {
-    if (s.className !== className || s.status !== 'Active') return false;
-    if (hasSections) {
-      return s.section === section;
-    }
-    return true;
-  });
+  // All active students in class across all arms
+  const allClassStudents = useMemo(() => {
+    return db.students.filter(s => {
+      const canonS = matchCanonicalClass(s.className || '', db.classes).className;
+      const isClassMatch =
+        (s.className || '').trim().toLowerCase() === className.trim().toLowerCase() ||
+        canonS.toLowerCase() === className.toLowerCase();
+      const isActive = !s.status || s.status === 'Active';
+      return isClassMatch && isActive;
+    });
+  }, [db.students, className, db.classes]);
+
+  // Available students in current class and section (if no sections or section is ALL, all students in class)
+  const eligibleStudents = useMemo(() => {
+    return allClassStudents.filter((s: Student) => {
+      if (hasSections && section && section !== 'ALL') {
+        return (s.section || '').trim().toUpperCase() === section.trim().toUpperCase();
+      }
+      return true;
+    });
+  }, [allClassStudents, hasSections, section]);
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
     initialStudentId || (eligibleStudents[0]?.studentId || '')
@@ -125,7 +139,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
   // Synchronize when class/section change
   useEffect(() => {
     if (eligibleStudents.length > 0) {
-      if (!eligibleStudents.some(s => s.studentId === selectedStudentId)) {
+      if (!eligibleStudents.some((s: Student) => s.studentId === selectedStudentId)) {
         setSelectedStudentId(eligibleStudents[0].studentId);
       }
     } else {
@@ -210,6 +224,17 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
             ? result.allStudents
             : [...result.newStudentsToEnroll, ...result.existingStudentsMatched];
 
+        // Sync dropdowns to match uploaded sheet so teacher sees all students immediately
+        if (result.detectedClasses.length > 0 && (!isTeacher || !teacherClass)) {
+          setClassName(result.detectedClasses[0]);
+        }
+        if (hasSections) {
+          setSection('ALL');
+        }
+        if (studentsToPass.length > 0) {
+          setSelectedStudentId(studentsToPass[0].studentId);
+        }
+
         onImportAssessmentSheet(
           studentsToPass,
           result.assessmentRecords,
@@ -218,7 +243,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
           result.detectedSections
         );
         setNotification({
-          text: `Uploaded and imported successfully! Added ${result.newStudentsToEnroll.length} new student(s), updated/overwritten ${result.existingStudentsMatched.length} existing student(s), and saved ${result.assessmentRecords.length} assessments.`,
+          text: `Uploaded and imported successfully! Processed ${studentsToPass.length} student(s) (${result.newStudentsToEnroll.length} new enrolled, ${result.existingStudentsMatched.length} updated) and saved ${result.assessmentRecords.length} assessments.`,
           type: 'success',
         });
       }
@@ -528,7 +553,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
 
   // Fast Student Navigation (Previous / Next)
   const currentStudentIndex = eligibleStudents.findIndex(
-    s => s.studentId === selectedStudentId
+    (s: Student) => s.studentId === selectedStudentId
   );
 
   const handlePrevStudent = () => {
@@ -704,11 +729,17 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
                 onChange={e => setSection(e.target.value)}
                 className="w-full text-xs font-semibold border border-slate-300 rounded p-2 bg-slate-50 focus:bg-white text-slate-900"
               >
-                {classSections.map(secName => (
-                  <option key={secName} value={secName}>
-                    Section {secName}
-                  </option>
-                ))}
+                <option value="ALL">All Arms / Sections ({allClassStudents.length} Students)</option>
+                {classSections.map(secName => {
+                  const countInSec = allClassStudents.filter(
+                    (s: Student) => (s.section || '').trim().toUpperCase() === secName.trim().toUpperCase()
+                  ).length;
+                  return (
+                    <option key={secName} value={secName}>
+                      Section {secName} ({countInSec} Students)
+                    </option>
+                  );
+                })}
               </select>
             )}
           </div>
@@ -729,7 +760,7 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
               {eligibleStudents.length === 0 ? (
                 <option value="">No students found in this class</option>
               ) : (
-                eligibleStudents.map((s, idx) => (
+                eligibleStudents.map((s: Student, idx: number) => (
                   <option key={s.id} value={s.studentId}>
                     {idx + 1}. {s.name} ({s.studentId})
                   </option>

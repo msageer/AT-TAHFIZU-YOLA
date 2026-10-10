@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppDatabase, NavigationTab, UserAccount, Student } from '../types';
 import { getSectionsForClass, formatClassWithSection } from '../utils/classSections';
+import { computeClassStatistics, calculateGrade } from '../utils/ranking';
+import { exportAssessmentBroadsheetToExcel, matchCanonicalClass } from '../utils/excel';
 import {
   Users,
   CheckCircle,
@@ -23,6 +25,9 @@ import {
   AlertCircle,
   Eye,
   GraduationCap,
+  FileSpreadsheet,
+  Printer,
+  Download,
 } from 'lucide-react';
 
 interface ClassViewProps {
@@ -33,6 +38,7 @@ interface ClassViewProps {
   onSelectReportStudent: (studentId: string) => void;
   onSaveStudent?: (student: Student) => void;
   onSelectStudentProfile?: (studentId: string) => void;
+  initialViewMode?: 'card' | 'table' | 'broadsheet';
 }
 
 export const ClassView: React.FC<ClassViewProps> = ({
@@ -43,6 +49,7 @@ export const ClassView: React.FC<ClassViewProps> = ({
   onSelectReportStudent,
   onSaveStudent,
   onSelectStudentProfile,
+  initialViewMode = 'card',
 }) => {
   const isTeacher = currentUser?.role === 'teacher';
   const teacherClass = currentUser?.assignedClass;
@@ -68,23 +75,30 @@ export const ClassView: React.FC<ClassViewProps> = ({
 
   const [selectedSection, setSelectedSection] = useState<string>(
     hasSections
-      ? (isTeacher && teacherSection ? teacherSection : (classSections[0] || 'A'))
+      ? (isTeacher && teacherSection ? teacherSection : 'ALL')
       : ''
   );
 
   // Synchronize section if current selection is not valid for this class
   useEffect(() => {
     if (hasSections) {
-      if (!classSections.includes(selectedSection)) {
-        setSelectedSection(classSections[0] || 'A');
+      if (selectedSection !== 'ALL' && !classSections.includes(selectedSection)) {
+        setSelectedSection('ALL');
       }
     } else {
       setSelectedSection('');
     }
   }, [selectedClass, classSections, selectedSection, hasSections]);
 
-  // View Mode: Card View (for student profiles) vs Table View (for quick bulk grading or status updates)
-  const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
+  // View Mode: Card View (for student profiles) vs Table View vs Broadsheet Summary
+  const [viewMode, setViewMode] = useState<'card' | 'table' | 'broadsheet'>(initialViewMode);
+
+  useEffect(() => {
+    if (initialViewMode) {
+      setViewMode(initialViewMode);
+    }
+  }, [initialViewMode]);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Active' | 'Inactive' | 'PendingMarks' | 'EnteredMarks'>('all');
 
@@ -94,18 +108,37 @@ export const ClassView: React.FC<ClassViewProps> = ({
 
   // Profile inspect modal
   const [inspectedStudent, setInspectedStudent] = useState<Student | null>(null);
+  const [reassignModalStudent, setReassignModalStudent] = useState<Student | null>(null);
+
+  // Canonical Class Check Helper: "Primary 1" matches "Primary One"
+  const isClassEquivalent = (studentOrAsmClass: string, targetClass: string) => {
+    if (!studentOrAsmClass || !targetClass) return false;
+    if (studentOrAsmClass.toLowerCase().trim() === targetClass.toLowerCase().trim()) return true;
+    const { className: canon1 } = matchCanonicalClass(studentOrAsmClass, db.classes);
+    const { className: canon2 } = matchCanonicalClass(targetClass, db.classes);
+    return canon1.toLowerCase().trim() === canon2.toLowerCase().trim();
+  };
+
+  // All active students in class across all arms
+  const allClassStudents = useMemo(() => {
+    return db.students.filter(s => {
+      const isClassMatch = isClassEquivalent(s.className || '', selectedClass);
+      const isActive = !s.status || s.status === 'Active';
+      return isClassMatch && isActive;
+    });
+  }, [db.students, selectedClass, db.classes]);
 
   // Filter students for this class and section
   const classStudents = useMemo(() => {
     return db.students.filter(s => {
-      const isClassMatch = s.className.toLowerCase().trim() === selectedClass.toLowerCase().trim();
+      const isClassMatch = isClassEquivalent(s.className || '', selectedClass);
       if (!isClassMatch) return false;
-      if (hasSections) {
-        return s.section === selectedSection;
+      if (hasSections && selectedSection && selectedSection !== 'ALL') {
+        return (s.section || '').toUpperCase().trim() === selectedSection.toUpperCase().trim();
       }
-      return true; // Classes without A and B have NO section
+      return true; // Classes without A and B or with 'ALL' have all students
     });
-  }, [db.students, selectedClass, selectedSection, hasSections]);
+  }, [db.students, selectedClass, selectedSection, hasSections, db.classes]);
 
   // Search & Status filtered students
   const filteredStudents = useMemo(() => {
@@ -217,6 +250,41 @@ export const ClassView: React.FC<ClassViewProps> = ({
     }
   };
 
+  // Filter assessments for broadsheet view
+  const classAssessments = useMemo(() => {
+    return db.assessments
+      .filter(
+        a =>
+          isClassEquivalent(a.className, selectedClass) &&
+          (!hasSections || selectedSection === 'ALL' || (a.section || '').toUpperCase().trim() === selectedSection.toUpperCase().trim()) &&
+          a.academicSession === selectedSession &&
+          a.term === selectedTerm
+      )
+      .sort((a, b) => b.finalAverage - a.finalAverage);
+  }, [db.assessments, selectedClass, hasSections, selectedSection, selectedSession, selectedTerm, db.classes]);
+
+  const studentMap = useMemo(() => {
+    return db.students.reduce<Record<string, Student>>((acc, s) => {
+      acc[s.studentId] = s;
+      return acc;
+    }, {});
+  }, [db.students]);
+
+  const broadsheetStats = useMemo(() => {
+    return computeClassStatistics(classAssessments);
+  }, [classAssessments]);
+
+  const handleExportBroadsheetExcel = () => {
+    exportAssessmentBroadsheetToExcel(
+      classAssessments,
+      studentMap,
+      selectedClass,
+      selectedSection === 'ALL' ? 'All_Arms' : selectedSection,
+      selectedSession,
+      selectedTerm
+    );
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -224,12 +292,34 @@ export const ClassView: React.FC<ClassViewProps> = ({
         <div>
           <h2 className="text-xl font-bold text-slate-900">Class Roster &amp; Academic Management</h2>
           <p className="text-xs text-slate-500">
-            Switch between Card View for student profiles and Table View for quick bulk grading and status updates.
+            Switch between Card View for student profiles, Table View for roster status, and Broadsheet for academic results.
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
-          {pendingCount > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {viewMode === 'broadsheet' && (
+            <>
+              <button
+                onClick={handleExportBroadsheetExcel}
+                disabled={classAssessments.length === 0}
+                className="bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+                title="Download class assessment broadsheet to Excel"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export Broadsheet</span>
+              </button>
+              <button
+                onClick={() => window.print()}
+                disabled={classAssessments.length === 0}
+                className="bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
+                title="Print Broadsheet"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print Broadsheet</span>
+              </button>
+            </>
+          )}
+          {pendingCount > 0 && viewMode !== 'broadsheet' && (
             <button
               onClick={handleGradeNextPending}
               className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition flex items-center space-x-1.5 shadow"
@@ -365,11 +455,17 @@ export const ClassView: React.FC<ClassViewProps> = ({
                 onChange={e => setSelectedSection(e.target.value)}
                 className="w-full text-xs font-semibold border border-slate-300 rounded-lg p-2 bg-slate-50 focus:bg-white text-slate-900"
               >
-                {classSections.map(secName => (
-                  <option key={secName} value={secName}>
-                    Section {secName}
-                  </option>
-                ))}
+                <option value="ALL">All Arms / Sections ({allClassStudents.length} Students)</option>
+                {classSections.map(secName => {
+                  const countInSec = allClassStudents.filter(
+                    s => (s.section || '').trim().toUpperCase() === secName.trim().toUpperCase()
+                  ).length;
+                  return (
+                    <option key={secName} value={secName}>
+                      Section {secName} ({countInSec} Students)
+                    </option>
+                  );
+                })}
               </select>
             )}
           </div>
@@ -379,7 +475,7 @@ export const ClassView: React.FC<ClassViewProps> = ({
         <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
           <div className="flex items-center space-x-3 sm:space-x-4 flex-wrap gap-1">
             <span className="font-bold text-slate-900">
-              {selectedClass} {hasSections ? `\u2022 Section ${selectedSection}` : '\u2022 Single Stream (No Section)'}
+              {selectedClass} {hasSections ? `\u2022 ${selectedSection === 'ALL' ? 'All Arms' : `Section ${selectedSection}`}` : '\u2022 Single Stream (No Section)'}
             </span>
             <span>
               Total: <strong className="text-slate-900">{classStudents.length}</strong> students
@@ -396,17 +492,17 @@ export const ClassView: React.FC<ClassViewProps> = ({
           </div>
 
           <button
-            onClick={() => setActiveTab('class-summary')}
-            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
+            onClick={() => setViewMode('broadsheet')}
+            className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline flex items-center space-x-1"
           >
-            View Complete Broadsheet Summary &rarr;
+            <span>{viewMode === 'broadsheet' ? 'Viewing Broadsheet Summary' : 'View Broadsheet & Performance Summary \u2192'}</span>
           </button>
         </div>
       </div>
 
       {/* Roster Controls: Toggle View Mode & Filters */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
-        {/* Toggle between Card View and Table View */}
+        {/* Toggle between Card View, Table View, and Broadsheet Summary */}
         <div className="flex items-center space-x-2">
           <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200">
             <button
@@ -435,10 +531,27 @@ export const ClassView: React.FC<ClassViewProps> = ({
               <TableProperties className="w-3.5 h-3.5" />
               <span>Table View</span>
             </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('broadsheet')}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition ${
+                viewMode === 'broadsheet'
+                  ? 'bg-white text-emerald-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Broadsheet View: Complete class scores, rankings, subjects and statistics"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Broadsheet &amp; Summary</span>
+            </button>
           </div>
 
-          <span className="text-xs text-slate-500 font-medium hidden md:inline">
-            {viewMode === 'card' ? 'Student Profiles Mode' : 'Bulk Grading & Roster Mode'}
+          <span className="text-xs text-slate-500 font-medium hidden lg:inline">
+            {viewMode === 'card'
+              ? 'Student Profiles Mode'
+              : viewMode === 'table'
+              ? 'Bulk Status & Roster Mode'
+              : 'Class Broadsheet & Performance Mode'}
           </span>
         </div>
 
@@ -511,8 +624,204 @@ export const ClassView: React.FC<ClassViewProps> = ({
         </div>
       )}
 
-      {/* No Students Message */}
-      {filteredStudents.length === 0 ? (
+      {/* View Mode Switching: Broadsheet vs Cards vs Table */}
+      {viewMode === 'broadsheet' ? (
+        /* =========================================================
+           BROADSHEET & PERFORMANCE SUMMARY VIEW
+           ========================================================= */
+        <div className="space-y-4">
+          {/* KPI Stats Box */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 no-print">
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-500 uppercase">Assessed Students</span>
+              <p className="text-2xl font-black text-slate-900 mt-1">{broadsheetStats.studentCount}</p>
+              <span className="text-xs text-slate-400">
+                {classStudents.length} total enrolled in stream
+              </span>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-500 uppercase">Highest Average</span>
+              <p className="text-2xl font-black text-emerald-600 mt-1">
+                {broadsheetStats.highestAverage > 0 ? `${broadsheetStats.highestAverage}%` : '-'}
+              </p>
+              <span className="text-xs text-slate-400">Class top mark</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-500 uppercase">Lowest Average</span>
+              <p className="text-2xl font-black text-amber-600 mt-1">
+                {broadsheetStats.lowestAverage > 0 ? `${broadsheetStats.lowestAverage}%` : '-'}
+              </p>
+              <span className="text-xs text-slate-400">Class minimum mark</span>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+              <span className="text-[11px] font-bold text-slate-500 uppercase">Class Average</span>
+              <p className="text-2xl font-black text-blue-700 mt-1">
+                {broadsheetStats.classAverage > 0 ? `${broadsheetStats.classAverage}%` : '-'}
+              </p>
+              <span className="text-xs text-slate-400">Class mean score</span>
+            </div>
+          </div>
+
+          {/* Broadsheet Table */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden print:border-none print:shadow-none">
+            {/* Printable Header */}
+            <div className="p-4 border-b border-slate-200 print:border-b-2 print:border-black text-center">
+              <h2 className="font-amiri text-xl font-bold text-slate-900 leading-snug">
+                {db.settings.arabicSchoolName}
+              </h2>
+              <h1 className="text-base font-black uppercase text-slate-900">
+                {db.settings.schoolName}
+              </h1>
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-700 mt-0.5">
+                CLASS ASSESSMENT BROADSHEET &bull; {selectedClass} (
+                {selectedSection === 'ALL' ? 'All Arms' : selectedSection}) &bull;{' '}
+                {selectedTerm} &bull; {selectedSession}
+              </p>
+              <div className="flex items-center justify-center space-x-6 text-xs text-slate-600 mt-1 print:text-black">
+                <span>
+                  Total Assessed: <strong>{broadsheetStats.studentCount}</strong>
+                </span>
+                <span>
+                  Highest: <strong>{broadsheetStats.highestAverage}%</strong>
+                </span>
+                <span>
+                  Lowest: <strong>{broadsheetStats.lowestAverage}%</strong>
+                </span>
+                <span>
+                  Class Average: <strong>{broadsheetStats.classAverage}%</strong>
+                </span>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100 text-slate-800 font-bold uppercase text-[11px] border-b border-slate-200 print:bg-gray-100 print:text-black">
+                  <tr>
+                    <th className="py-2.5 px-3 text-center w-16">Position</th>
+                    <th className="py-2.5 px-3">Student ID</th>
+                    <th className="py-2.5 px-3">Student Full Name</th>
+                    {hasSections && selectedSection === 'ALL' && (
+                      <th className="py-2.5 px-3 text-center">Arm</th>
+                    )}
+                    <th className="py-2.5 px-3 text-center">Total Score</th>
+                    <th className="py-2.5 px-3 text-center">Final Avg (%)</th>
+                    <th className="py-2.5 px-3 text-center">Grade</th>
+                    <th className="py-2.5 px-3 text-center">Present</th>
+                    <th className="py-2.5 px-3 text-center">Absent</th>
+                    <th className="py-2.5 px-3">Remark</th>
+                    <th className="py-2.5 px-3 text-right no-print">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 print:divide-slate-300">
+                  {classAssessments.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="py-12 text-center text-slate-400">
+                        <TableProperties className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+                        <p className="font-semibold text-slate-600">
+                          No assessment records found for {selectedClass} ({selectedTerm}).
+                        </p>
+                        <button
+                          onClick={() => setActiveTab('assessment')}
+                          className="mt-2 text-xs text-emerald-700 hover:underline font-semibold no-print"
+                        >
+                          Enter student assessment marks now &rarr;
+                        </button>
+                      </td>
+                    </tr>
+                  ) : (
+                    classAssessments.map(record => {
+                      const student = studentMap[record.studentId];
+                      const { grade } = calculateGrade(record.finalAverage, db.gradingBoundaries);
+
+                      return (
+                        <tr
+                          key={record.id}
+                          className="hover:bg-slate-50 transition print:hover:bg-transparent"
+                        >
+                          <td className="py-2.5 px-3 text-center font-bold text-slate-900 bg-slate-50/70 print:bg-transparent">
+                            <span className="inline-block px-2 py-0.5 rounded font-black text-xs bg-slate-200 text-slate-900 print:bg-transparent print:border print:border-black">
+                              {record.finalPosition || '-'}
+                            </span>
+                          </td>
+
+                          <td className="py-2.5 px-3 font-mono font-medium text-slate-600">
+                            {record.studentId}
+                          </td>
+
+                          <td className="py-2.5 px-3 font-bold text-slate-900">
+                            {student ? student.name : record.studentId}
+                          </td>
+
+                          {hasSections && selectedSection === 'ALL' && (
+                            <td className="py-2.5 px-3 text-center font-bold text-slate-700">
+                              {record.section || '-'}
+                            </td>
+                          )}
+
+                          <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-900">
+                            {record.totalScore}
+                          </td>
+
+                          <td className="py-2.5 px-3 text-center font-mono font-bold text-emerald-700">
+                            {record.finalAverage}%
+                          </td>
+
+                          <td className="py-2.5 px-3 text-center">
+                            <span className="font-black px-2 py-0.5 rounded bg-slate-900 text-white text-[11px] print:text-black print:bg-transparent print:border">
+                              {grade}
+                            </span>
+                          </td>
+
+                          <td className="py-2.5 px-3 text-center font-medium text-slate-700">
+                            {record.daysPresent}
+                          </td>
+
+                          <td className="py-2.5 px-3 text-center font-medium text-slate-700">
+                            {record.daysAbsent}
+                          </td>
+
+                          <td className="py-2.5 px-3 text-xs italic text-slate-600">
+                            {record.promotionRemark || record.formTeacherComment || '-'}
+                          </td>
+
+                          <td className="py-2.5 px-3 text-right space-x-1.5 whitespace-nowrap no-print">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onSelectAssessmentStudent(
+                                  record.studentId,
+                                  record.className,
+                                  record.section || ''
+                                )
+                              }
+                              className="bg-blue-50 hover:bg-blue-100 text-blue-800 font-bold text-xs px-2.5 py-1 rounded-lg border border-blue-200 transition inline-flex items-center space-x-1"
+                              title="Edit assessment scores"
+                            >
+                              <ClipboardPenLine className="w-3 h-3" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onSelectReportStudent(record.studentId)}
+                              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold text-xs px-2.5 py-1 rounded-lg border border-emerald-200 transition"
+                              title="View student report card"
+                            >
+                              Report
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : filteredStudents.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400 shadow-sm">
           <Users className="w-12 h-12 mx-auto mb-2 text-slate-300" />
           <p className="font-semibold text-slate-700">

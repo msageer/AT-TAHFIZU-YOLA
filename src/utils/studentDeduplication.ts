@@ -87,12 +87,12 @@ export function findDuplicateStudentGroups(students: Student[]): DuplicateStuden
     }
   });
 
-  // 3. Group by Name + Class Name
+  // 3. Group by Name + Class Name (ONLY when admission numbers and student IDs do not conflict)
   const nameClassMap = new Map<string, Student[]>();
   students.forEach(s => {
     const normName = normalizeStudentName(s.name);
     const normClass = (s.className || '').toLowerCase().trim();
-    if (normName && normClass) {
+    if (normName && normClass && normName.split(' ').length >= 2) {
       const key = `${normName}__${normClass}`;
       const list = nameClassMap.get(key) || [];
       list.push(s);
@@ -102,14 +102,28 @@ export function findDuplicateStudentGroups(students: Student[]): DuplicateStuden
 
   nameClassMap.forEach((matched, key) => {
     if (matched.length > 1) {
-      const alreadyCovered = matched.every(s => processedIds.has(s.id));
-      if (!alreadyCovered) {
-        groups.push({
-          key: `name:${key}`,
-          reason: 'NAME_AND_CLASS',
-          students: matched,
-        });
-        matched.forEach(s => processedIds.add(s.id));
+      // Ensure students don't have conflicting distinct admission numbers or IDs
+      const hasConflict = matched.some((s1, idx1) =>
+        matched.some((s2, idx2) => {
+          if (idx1 === idx2) return false;
+          const id1 = normalizeIdentifier(s1.studentId);
+          const id2 = normalizeIdentifier(s2.studentId);
+          const adm1 = normalizeIdentifier(s1.admissionNumber);
+          const adm2 = normalizeIdentifier(s2.admissionNumber);
+          return (id1 && id2 && id1 !== id2) || (adm1 && adm2 && adm1 !== adm2);
+        })
+      );
+
+      if (!hasConflict) {
+        const alreadyCovered = matched.every(s => processedIds.has(s.id));
+        if (!alreadyCovered) {
+          groups.push({
+            key: `name:${key}`,
+            reason: 'NAME_AND_CLASS',
+            students: matched,
+          });
+          matched.forEach(s => processedIds.add(s.id));
+        }
       }
     }
   });
@@ -166,14 +180,27 @@ export function deduplicateStudents(
     const existingIndex = canonicalStudents.findIndex(cs => {
       // 1. Same internal ID
       if (cs.id === candidate.id) return true;
-      // 2. Same student ID
-      if (normId && normalizeIdentifier(cs.studentId) === normId) return true;
-      // 3. Same admission number
-      if (normAdm && normalizeIdentifier(cs.admissionNumber) === normAdm) return true;
-      // 4. Same Name and Class
+
+      const csId = normalizeIdentifier(cs.studentId);
+      const csAdm = normalizeIdentifier(cs.admissionNumber);
+
+      // 2. Same non-empty student ID
+      if (normId && csId === normId) return true;
+
+      // 3. Same non-empty admission number
+      if (normAdm && csAdm === normAdm) return true;
+
+      // If both have different non-empty IDs, they are definitely distinct students!
+      if (normId && csId && normId !== csId) return false;
+
+      // If both have different non-empty admission numbers, they are definitely distinct students!
+      if (normAdm && csAdm && normAdm !== csAdm) return false;
+
+      // 4. Same Name and Class (only if full name has at least 2 words and IDs do not conflict)
       if (
         normName &&
         normClass &&
+        normName.split(' ').length >= 2 &&
         normalizeStudentName(cs.name) === normName &&
         (cs.className || '').toLowerCase().trim() === normClass
       ) {

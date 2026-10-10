@@ -240,7 +240,8 @@ export function validateMappedSpreadsheet(
   mapping: ColumnMapping,
   existingStudents: Student[],
   availableClasses: ClassItem[],
-  availableSections: SectionItem[]
+  availableSections: SectionItem[],
+  allowOverrideExisting: boolean = true
 ): FlexibleImportResult {
   const validStudents: Student[] = [];
   const errors: ExcelValidationError[] = [];
@@ -365,13 +366,22 @@ export function validateMappedSpreadsheet(
     } else {
       const lower = studentIdRaw.toLowerCase();
       if (existingStudentIds.has(lower)) {
-        errors.push({
-          row: rowNum,
-          field: 'Student ID',
-          message: `Student ID "${studentIdRaw}" already exists in system`,
-          type: 'error',
-        });
-        hasRowError = true;
+        if (allowOverrideExisting) {
+          warnings.push({
+            row: rowNum,
+            field: 'Student ID',
+            message: `Student ID "${studentIdRaw}" exists in system; will override/update existing profile (no duplicate).`,
+            type: 'warning',
+          });
+        } else {
+          errors.push({
+            row: rowNum,
+            field: 'Student ID',
+            message: `Student ID "${studentIdRaw}" already exists in system`,
+            type: 'error',
+          });
+          hasRowError = true;
+        }
       } else if (seenSheetStudentIds.has(lower)) {
         errors.push({
           row: rowNum,
@@ -390,13 +400,22 @@ export function validateMappedSpreadsheet(
     } else {
       const lowerAdm = admRaw.toLowerCase();
       if (existingAdmNumbers.has(lowerAdm)) {
-        errors.push({
-          row: rowNum,
-          field: 'Admission Number',
-          message: `Admission Number "${admRaw}" already registered to another student`,
-          type: 'error',
-        });
-        hasRowError = true;
+        if (allowOverrideExisting) {
+          warnings.push({
+            row: rowNum,
+            field: 'Admission Number',
+            message: `Admission Number "${admRaw}" already exists; will override/update existing student.`,
+            type: 'warning',
+          });
+        } else {
+          errors.push({
+            row: rowNum,
+            field: 'Admission Number',
+            message: `Admission Number "${admRaw}" already registered to another student`,
+            type: 'error',
+          });
+          hasRowError = true;
+        }
       } else if (seenSheetAdmNumbers.has(lowerAdm)) {
         errors.push({
           row: rowNum,
@@ -891,6 +910,76 @@ export function downloadAssessmentSheetTemplate(
 }
 
 /**
+ * Normalizes and matches raw class names from Excel to canonical school classes.
+ * Handles:
+ * - "Primary 1" -> "Primary One"
+ * - "Primary 2A" -> Class: "Primary Two", Section: "A"
+ * - "Pri 2" -> "Primary Two"
+ * - "JSS 1" -> "JSS One"
+ * - "Nursery 1" -> "Nursery One"
+ * - "Basic 1" -> "Primary One"
+ */
+export function matchCanonicalClass(
+  rawClassName: string,
+  availableClasses: ClassItem[]
+): { className: string; section?: string } {
+  if (!rawClassName) return { className: '' };
+  const clean = rawClassName.trim();
+
+  // 1. Direct case-insensitive match
+  const exact = availableClasses.find(
+    c => c.name.toLowerCase().trim() === clean.toLowerCase()
+  );
+  if (exact) return { className: exact.name };
+
+  // 2. Check for embedded section e.g. "Primary 2A", "Primary 2 (A)", "Primary 2 - A", "Primary Two A"
+  const sectionMatch = clean.match(/^(.+?)(?:\s*[\(\-\/]\s*|\s+)([A-Za-z])(?:\))?$/);
+  let baseName = clean;
+  let extractedSection: string | undefined = undefined;
+
+  if (sectionMatch) {
+    baseName = sectionMatch[1].trim();
+    extractedSection = sectionMatch[2].toUpperCase();
+  }
+
+  // 3. Number to word mapping: 1 -> One, 2 -> Two, 3 -> Three, 4 -> Four, 5 -> Five, 6 -> Six
+  const numToWords: Record<string, string> = {
+    '1': 'One',
+    '2': 'Two',
+    '3': 'Three',
+    '4': 'Four',
+    '5': 'Five',
+    '6': 'Six',
+  };
+
+  let normalizedBase = baseName
+    .replace(/\bpri\b/gi, 'Primary')
+    .replace(/\bnur\b/gi, 'Nursery')
+    .replace(/\bkg\b/gi, 'Kindergarten')
+    .replace(/\bbasic\b/gi, 'Primary');
+
+  Object.entries(numToWords).forEach(([num, word]) => {
+    normalizedBase = normalizedBase.replace(new RegExp(`\\b${num}\\b`, 'g'), word);
+  });
+
+  const matched = availableClasses.find(
+    c => c.name.toLowerCase().replace(/[^a-z0-9]/g, '') === normalizedBase.toLowerCase().replace(/[^a-z0-9]/g, '')
+  );
+  if (matched) {
+    return { className: matched.name, section: extractedSection };
+  }
+
+  const matchedOriginal = availableClasses.find(
+    c => c.name.toLowerCase().replace(/[^a-z0-9]/g, '') === baseName.toLowerCase().replace(/[^a-z0-9]/g, '')
+  );
+  if (matchedOriginal) {
+    return { className: matchedOriginal.name, section: extractedSection };
+  }
+
+  return { className: clean, section: extractedSection };
+}
+
+/**
  * Parses and validates an uploaded Assessment Spreadsheet.
  * AUTOMATIC STUDENT ENROLLMENT: Any student not already in db.students is created!
  */
@@ -935,7 +1024,31 @@ export async function parseAndValidateAssessmentSpreadsheet(
   }
 
   const ws = wb.Sheets[sheetName];
-  const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+
+  // ENSURE WORKBOOK RANGE COVERS ALL CELLS (prevent XLSX from truncating beyond row 20)
+  if (ws) {
+    let maxR = 0;
+    let maxC = 0;
+    for (const key of Object.keys(ws)) {
+      if (key.startsWith('!')) continue;
+      try {
+        const cell = XLSX.utils.decode_cell(key);
+        if (cell.r > maxR) maxR = cell.r;
+        if (cell.c > maxC) maxC = cell.c;
+      } catch (e) {
+        // ignore invalid cell keys
+      }
+    }
+    const curRef = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
+    if (maxR > curRef.e.r || maxC > curRef.e.c) {
+      ws['!ref'] = XLSX.utils.encode_range({
+        s: { r: 0, c: 0 },
+        e: { r: Math.max(curRef.e.r, maxR), c: Math.max(curRef.e.c, maxC) }
+      });
+    }
+  }
+
+  const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 
   const errors: ExcelValidationError[] = [];
   const warnings: ExcelValidationError[] = [];
@@ -957,30 +1070,59 @@ export async function parseAndValidateAssessmentSpreadsheet(
     };
   }
 
-  // 2. Intelligent Multi-Score Header Row Detection
+  // Scan top banner rows (0 to 6) for sheet-level class, section, session, or term metadata
+  let sheetMetaClass = '';
+  let sheetMetaSection = '';
+  let sheetMetaSession = '';
+  let sheetMetaTerm = '';
+
+  for (let r = 0; r < Math.min(6, rawRows.length); r++) {
+    const row = rawRows[r];
+    if (!Array.isArray(row)) continue;
+    const textJoined = row.map(c => String(c || '').replace(/\u00A0/g, ' ').trim()).join(' ');
+
+    const clsM = textJoined.match(/(?:class|grade|level)\s*[:=\-]?\s*([a-zA-Z0-9\s]+?)(?:arm|section|term|session|\n|$)/i);
+    if (clsM && clsM[1] && !sheetMetaClass) {
+      sheetMetaClass = clsM[1].trim();
+    }
+    const secM = textJoined.match(/(?:section|arm|stream)\s*[:=\-]?\s*([a-zA-Z0-9])/i);
+    if (secM && secM[1] && !sheetMetaSection) {
+      sheetMetaSection = secM[1].trim().toUpperCase();
+    }
+    const sessM = textJoined.match(/(?:session|year)\s*[:=\-]?\s*(\d{4}\s*\/\s*\d{4})/i);
+    if (sessM && sessM[1] && !sheetMetaSession) {
+      sheetMetaSession = sessM[1].replace(/\s+/g, '');
+    }
+    const termM = textJoined.match(/(1st\s*Term|2nd\s*Term|3rd\s*Term|First\s*Term|Second\s*Term|Third\s*Term)/i);
+    if (termM && termM[1] && !sheetMetaTerm) {
+      sheetMetaTerm = termM[1].replace(/First\s*Term/i, '1st Term').replace(/Second\s*Term/i, '2nd Term').replace(/Third\s*Term/i, '3rd Term');
+    }
+  }
+
+  // 2. Intelligent Multi-Score Header Row Detection (Top 6 rows max to prevent skipping student rows!)
   let headerRowIndex = 0;
   let highestHeaderScore = -1;
 
-  for (let r = 0; r < Math.min(25, rawRows.length); r++) {
+  for (let r = 0; r < Math.min(6, rawRows.length); r++) {
     const row = rawRows[r];
     if (!Array.isArray(row)) continue;
-    const lowerTexts = row.map(cell => String(cell || '').toLowerCase().trim()).filter(Boolean);
+    const lowerTexts = row.map(cell => String(cell || '').replace(/\u00A0/g, ' ').toLowerCase().trim()).filter(Boolean);
     if (lowerTexts.length === 0) continue;
 
     let score = 0;
     // Check for student name indicators
-    if (lowerTexts.some(t => t.includes('student name') || t.includes('pupil name') || t.includes('full name') || t === 'name' || t.includes('candidate'))) {
+    if (lowerTexts.some(t => t.includes('student name') || t.includes('pupil name') || t.includes('full name') || t === 'name' || t.includes('candidate') || t.includes('learner name'))) {
       score += 50;
-    } else if (lowerTexts.some(t => t.includes('name') || t.includes('student') || t.includes('pupil'))) {
-      score += 30;
+    } else if (lowerTexts.some(t => t === 'student' || t === 'pupil' || t === 'names' || t.includes('name of'))) {
+      score += 35;
     }
 
     // Check for admission / ID
-    if (lowerTexts.some(t => t.includes('adm') || t.includes('admission') || t.includes('id') || t.includes('reg'))) score += 20;
+    if (lowerTexts.some(t => t.includes('adm') || t.includes('admission') || t.includes('id') || t.includes('reg'))) score += 25;
     // Check for class / grade / section
     if (lowerTexts.some(t => t.includes('class') || t.includes('grade') || t.includes('section') || t.includes('arm'))) score += 20;
     // Check for score keywords
-    if (lowerTexts.some(t => t.includes('ca1') || t.includes('ca2') || t.includes('exam') || t.includes('total') || t.includes('score') || t.includes('test'))) score += 30;
+    if (lowerTexts.some(t => t.includes('ca1') || t.includes('ca2') || t.includes('exam') || t.includes('total') || t.includes('score') || t.includes('test'))) score += 35;
 
     // Check for known subject names
     const hasKnownSubject = lowerTexts.some(t =>
@@ -992,19 +1134,44 @@ export async function parseAndValidateAssessmentSpreadsheet(
     if (score > highestHeaderScore) {
       highestHeaderScore = score;
       headerRowIndex = r;
+      if (score >= 90) break; // Decisive header row match
     }
   }
 
-  // Support 2-row merged headers if row right below has CA1/CA2/Exam or row right above has subject names
-  const baseHeaderRow = (rawRows[headerRowIndex] || []).map(cell => String(cell || '').trim());
+  // Support 2-row merged headers ONLY if row right below is a true subheader with multiple score keywords and no student data
+  const baseHeaderRow = (rawRows[headerRowIndex] || []).map(cell => String(cell || '').replace(/\u00A0/g, ' ').trim());
   const combinedHeaders: string[] = [...baseHeaderRow];
 
+  let hasTrueSubHeaderRow = false;
   const nextRow = rawRows[headerRowIndex + 1];
   if (Array.isArray(nextRow)) {
-    const nextLower = nextRow.map(c => String(c || '').toLowerCase().trim());
-    const isSubHeaderRow = nextLower.some(t => t.includes('ca') || t.includes('exam') || t.includes('test') || t.includes('total'));
-    if (isSubHeaderRow) {
-      // Propagate parent subject names to subheaders
+    const nextLower = nextRow.map(c => String(c || '').replace(/\u00A0/g, ' ').toLowerCase().trim());
+    const scoreKeywordsCount = nextLower.filter(
+      t =>
+        t === 'ca1' ||
+        t === 'ca2' ||
+        t === 'ca 1' ||
+        t === 'ca 2' ||
+        t === 'exam' ||
+        t === 'total' ||
+        t === 'test 1' ||
+        t === 'test 2' ||
+        t === '1st ca' ||
+        t === '2nd ca'
+    ).length;
+
+    // Only classify as subheader if >= 2 score sub-labels exist AND first cells do NOT contain numbers like S/N "1" or student names
+    const firstCell = String(nextRow[0] || '').trim();
+    const secondCell = String(nextRow[1] || '').trim();
+    const thirdCell = String(nextRow[2] || '').trim();
+    const isStudentDataRow =
+      (firstCell === '1' && secondCell.length > 2) ||
+      (secondCell === '1' && thirdCell.length > 2) ||
+      firstCell === '1' ||
+      secondCell === '1';
+
+    if (scoreKeywordsCount >= 2 && !isStudentDataRow) {
+      hasTrueSubHeaderRow = true;
       let currentParentHeader = '';
       for (let i = 0; i < Math.max(baseHeaderRow.length, nextRow.length); i++) {
         if (baseHeaderRow[i] && baseHeaderRow[i].trim() !== '') {
@@ -1245,13 +1412,19 @@ export async function parseAndValidateAssessmentSpreadsheet(
   const sessionYear = (overrideSession || db.settings.currentSession || '2026/2027').split('/')[0];
 
   // 5. Parse Each Student & Assessment Row
-  const startRow = nextRow && nextRow.some(c => String(c || '').toLowerCase().includes('ca') || String(c || '').toLowerCase().includes('exam'))
-    ? headerRowIndex + 2
-    : headerRowIndex + 1;
+  const startRow = hasTrueSubHeaderRow ? headerRowIndex + 2 : headerRowIndex + 1;
+  const colSn = findColIndex(['s/n', 'sn', 's.n', 's.no', 'serial no', 'serial number', 'no.', 'no']);
+
+  let lastSeenClass = sheetMetaClass || overrideClass || '';
+  let lastSeenSection = sheetMetaSection || overrideSection || '';
 
   for (let r = startRow; r < rawRows.length; r++) {
     const row = rawRows[r];
     if (!row || !Array.isArray(row)) continue;
+
+    const rawAdm = colAdm !== -1 && row[colAdm] ? String(row[colAdm]).trim() : '';
+    const rawId = colId !== -1 && row[colId] ? String(row[colId]).trim() : '';
+    const rawGender = colGender !== -1 && row[colGender] ? String(row[colGender]).trim().toLowerCase() : '';
 
     let rowStudentName = '';
     if (colSurname !== -1 && colFirstName !== -1 && colSurname !== colFirstName) {
@@ -1261,10 +1434,53 @@ export async function parseAndValidateAssessmentSpreadsheet(
         rowStudentName = `${sur} ${first}`.replace(/\s+/g, ' ').trim();
       }
     }
-    if (!rowStudentName) {
+    if (!rowStudentName && colName !== -1) {
       rowStudentName = String(row[colName] || '').replace(/\s+/g, ' ').trim();
     }
-    if (!rowStudentName) continue; // Skip empty row
+
+    // Robust Fallback: If student name was blank or in a non-standard column, search text cells in first 6 columns
+    if (!rowStudentName) {
+      for (let c = 0; c < Math.min(row.length, 6); c++) {
+        if (c === colAdm || c === colId || c === colClass || c === colSection || c === colSn) continue;
+        const cellVal = String(row[c] || '').trim();
+        if (
+          cellVal &&
+          isNaN(Number(cellVal)) &&
+          cellVal.length >= 2 &&
+          !cellVal.toLowerCase().startsWith('adm') &&
+          !cellVal.toLowerCase().startsWith('stu') &&
+          !['male', 'female', 'm', 'f'].includes(cellVal.toLowerCase())
+        ) {
+          rowStudentName = cellVal;
+          break;
+        }
+      }
+    }
+
+    // If still blank, but admission number, ID or S/N exists, do not discard student!
+    if (!rowStudentName && (rawAdm || rawId)) {
+      rowStudentName = `Student ${rawAdm || rawId}`;
+    } else if (!rowStudentName && colSn !== -1 && row[colSn]) {
+      const snVal = String(row[colSn]).trim();
+      if (snVal && !isNaN(Number(snVal))) {
+        rowStudentName = `Student #${snVal}`;
+      }
+    }
+
+    // Check if row has any subject scores entered (never drop a student who has marks!)
+    const hasAnyRowMarks = detectedSubjectCols.some(dsc => {
+      const c1 = dsc.colCa1 !== -1 && row[dsc.colCa1] !== undefined && row[dsc.colCa1] !== '';
+      const c2 = dsc.colCa2 !== -1 && row[dsc.colCa2] !== undefined && row[dsc.colCa2] !== '';
+      const ex = dsc.colExam !== -1 && row[dsc.colExam] !== undefined && row[dsc.colExam] !== '';
+      const tot = dsc.colTotal !== -1 && row[dsc.colTotal] !== undefined && row[dsc.colTotal] !== '';
+      return c1 || c2 || ex || tot;
+    });
+
+    if (!rowStudentName && hasAnyRowMarks) {
+      rowStudentName = `Student Row #${r + 1}`;
+    }
+
+    if (!rowStudentName) continue; // Skip completely empty row
 
     // Skip summary / footnote rows
     const upperName = rowStudentName.toUpperCase();
@@ -1275,37 +1491,58 @@ export async function parseAndValidateAssessmentSpreadsheet(
       upperName.startsWith('AVERAGE') ||
       upperName.startsWith('GRAND') ||
       upperName.startsWith('CLASS TEACHER') ||
-      upperName.startsWith('HEAD TEACHER')
+      upperName.startsWith('HEAD TEACHER') ||
+      upperName === 'STUDENT NAME' ||
+      upperName === 'NAMES' ||
+      upperName === 'NAME'
     ) {
       continue;
     }
 
-    const rowClass =
-      (colClass !== -1 && row[colClass] ? String(row[colClass]).trim() : '') ||
-      overrideClass ||
-      db.classes[0]?.name ||
-      'Primary One';
+    // Extract raw class & section, inheriting from previous row if cells were merged/blank in Excel
+    let rawRowClass = (colClass !== -1 && row[colClass] ? String(row[colClass]).trim() : '');
+    let rawRowSection = (colSection !== -1 && row[colSection] ? String(row[colSection]).trim() : '');
 
-    const rowSection =
-      (colSection !== -1 && row[colSection] ? String(row[colSection]).trim() : '') ||
+    if (!rawRowClass && lastSeenClass) {
+      rawRowClass = lastSeenClass;
+    }
+    if (!rawRowSection && lastSeenSection) {
+      rawRowSection = lastSeenSection;
+    }
+
+    // Canonical Class Normalization (e.g. "Primary 1" -> "Primary One", "Pri 2A" -> "Primary Two" + Section "A")
+    const { className: canonicalClass, section: extractedSec } = matchCanonicalClass(
+      rawRowClass || overrideClass || db.classes[0]?.name || 'Primary One',
+      db.classes
+    );
+
+    const rowClass = canonicalClass;
+    const resolvedSection = (
+      extractedSec ||
+      rawRowSection ||
+      sheetMetaSection ||
       overrideSection ||
-      (db.sections[0]?.name || 'A');
+      (db.sections[0]?.name || 'A')
+    ).trim().toUpperCase();
+
+    const rowSection = resolvedSection;
+
+    if (rowClass) lastSeenClass = rowClass;
+    if (rowSection) lastSeenSection = rowSection;
 
     const rowSession =
       (colSession !== -1 && row[colSession] ? String(row[colSession]).trim() : '') ||
+      sheetMetaSession ||
       overrideSession ||
       db.settings.currentSession ||
       '2026/2027';
 
     const rowTerm =
       (colTerm !== -1 && row[colTerm] ? String(row[colTerm]).trim() : '') ||
+      sheetMetaTerm ||
       overrideTerm ||
       db.settings.currentTerm ||
       '1st Term';
-
-    const rawAdm = colAdm !== -1 && row[colAdm] ? String(row[colAdm]).trim() : '';
-    const rawId = colId !== -1 && row[colId] ? String(row[colId]).trim() : '';
-    const rawGender = colGender !== -1 && row[colGender] ? String(row[colGender]).trim().toLowerCase() : '';
 
     detectedClassesSet.add(rowClass);
     if (rowSection) detectedSectionsSet.add(rowSection);
@@ -1323,9 +1560,23 @@ export async function parseAndValidateAssessmentSpreadsheet(
     } else if (rawId && existingStudentById.has(rawId.toLowerCase().trim())) {
       matchedExisting = existingStudentById.get(rawId.toLowerCase().trim())!;
     } else if (existingStudentByNameAndClass.has(`${normName}__${normClass}`)) {
-      matchedExisting = existingStudentByNameAndClass.get(`${normName}__${normClass}`)!;
-    } else if (existingStudentByName.has(normName)) {
-      matchedExisting = existingStudentByName.get(normName)!;
+      const candidate = existingStudentByNameAndClass.get(`${normName}__${normClass}`)!;
+      const conflictAdm =
+        rawAdm &&
+        candidate.admissionNumber &&
+        rawAdm.toLowerCase().trim() !== candidate.admissionNumber.toLowerCase().trim();
+      const conflictId =
+        rawId &&
+        candidate.studentId &&
+        rawId.toLowerCase().trim() !== candidate.studentId.toLowerCase().trim();
+      
+      // Only match existing student if:
+      // 1. Neither ID conflicts
+      // 2. Name is at least 2 words (to prevent false collisions on single names like "Fatima")
+      // 3. AND the candidate is NOT a student already enrolled earlier from THIS SAME uploaded file!
+      if (!conflictAdm && !conflictId && normName.split(' ').length >= 2 && !newStudentsToEnroll.some(ns => ns.id === candidate.id)) {
+        matchedExisting = candidate;
+      }
     }
 
     let studentObj: Student;
@@ -1362,24 +1613,32 @@ export async function parseAndValidateAssessmentSpreadsheet(
         existingStudentsMatched.push(studentObj);
       }
     } else {
-      // Check if we already created this student in an earlier row of this sheet
-      const newlyAdded = newStudentsToEnroll.find(
-        ns =>
-          (rawAdm && ns.admissionNumber.toLowerCase() === rawAdm.toLowerCase()) ||
-          (rawId && ns.studentId.toLowerCase() === rawId.toLowerCase()) ||
-          (ns.name.toLowerCase() === rowStudentName.toLowerCase() && ns.className.toLowerCase() === rowClass.toLowerCase())
-      );
+      // Check if we already created this student in an earlier row of this sheet (only if IDs explicitly match)
+      const newlyAdded = (rawAdm || rawId)
+        ? newStudentsToEnroll.find(
+            ns =>
+              (rawAdm && ns.admissionNumber.toLowerCase() === rawAdm.toLowerCase()) ||
+              (rawId && ns.studentId.toLowerCase() === rawId.toLowerCase())
+          )
+        : null;
 
       if (newlyAdded) {
         studentObj = newlyAdded;
       } else {
         // AUTOMATICALLY ENROLL NEW STUDENT
+        while (
+          (db.students || []).some(s => s.studentId === `STU-${sessionYear}-${String(studentIdCounter).padStart(3, '0')}`) ||
+          newStudentsToEnroll.some(s => s.studentId === `STU-${sessionYear}-${String(studentIdCounter).padStart(3, '0')}`)
+        ) {
+          studentIdCounter++;
+        }
+
         const generatedStudentId = rawId || `STU-${sessionYear}-${String(studentIdCounter).padStart(3, '0')}`;
         const generatedAdmissionNumber = rawAdm || `ADM/${sessionYear}/${String(studentIdCounter).padStart(3, '0')}`;
         studentIdCounter++;
 
         studentObj = {
-          id: `stu-${Date.now()}-${r}-${Math.random().toString(36).substr(2, 5)}`,
+          id: `stu-${Date.now()}-${r}-${Math.random().toString(36).substr(2, 6)}`,
           schoolId: db.schoolId || 'school-main',
           studentId: generatedStudentId,
           admissionNumber: generatedAdmissionNumber,

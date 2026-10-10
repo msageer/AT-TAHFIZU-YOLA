@@ -11,6 +11,7 @@ import {
   setupRealtimeSync,
   syncDatabaseToFirestore,
   deleteStudentFromFirestore,
+  deleteStudentsBatchFromFirestore,
   deleteUserFromFirestore,
   setSyncDbSnapshot,
   isQuotaExhausted,
@@ -30,6 +31,13 @@ import {
   UserAccount,
 } from './types';
 import { rankAssessments } from './utils/ranking';
+import { matchCanonicalClass } from './utils/excel';
+import {
+  saveStudentWithoutDuplicates,
+  deduplicateStudents,
+  findDuplicateStudentGroups,
+  DeduplicationResult,
+} from './utils/studentDeduplication';
 import { CheckCircle2, AlertTriangle, AlertOctagon, X } from 'lucide-react';
 import { AuthPage } from './components/AuthPage';
 import { Navbar } from './components/Navbar';
@@ -265,22 +273,15 @@ export default function App() {
   // STUDENT CRUD
   // ==========================================
   const handleSaveStudent = (student: Student) => {
-    const existingIndex = db.students.findIndex(s => s.id === student.id);
-    let updatedStudents: Student[];
-    const isNew = existingIndex < 0;
-    if (!isNew) {
-      updatedStudents = [...db.students];
-      updatedStudents[existingIndex] = student;
-    } else {
-      updatedStudents = [student, ...db.students];
-    }
-    let updatedDb: AppDatabase = { ...db, students: updatedStudents };
+    // Override/merge if student already exists, avoiding duplicate creation
+    const { updatedList, wasOverwritten } = saveStudentWithoutDuplicates(db.students, student);
+    let updatedDb: AppDatabase = { ...db, students: updatedList };
     if (currentUser) {
       updatedDb = addAuditLog(
         updatedDb,
         currentUser,
         'SAVE_STUDENT',
-        `${isNew ? 'Added student' : 'Updated student'} ${student.name} (${student.admissionNumber || student.studentId}) in ${student.className}`
+        `${wasOverwritten ? 'Updated / Overwrote student' : 'Added student'} ${student.name} (${student.admissionNumber || student.studentId}) in ${student.className}`
       );
     }
     updateDatabase(updatedDb);
@@ -352,21 +353,69 @@ export default function App() {
       attendance: updatedAttendance,
     };
 
+    const deletedCount = targetStudents.length || identifiers.length;
     if (currentUser) {
       updatedDb = addAuditLog(
         updatedDb,
         currentUser,
         'BATCH_DELETE_STUDENTS',
-        `Batch deleted ${targetStudents.length || identifiers.length} student records`
+        `Batch deleted ${deletedCount} student records and associated marks/attendance`
       );
     }
     updateDatabase(updatedDb);
 
-    targetStudents.forEach(ts => {
-      deleteStudentFromFirestore(ts.id, ts.studentId).catch(err => {
-        console.error('Failed to delete student from cloud:', err);
-      });
+    // Cloud batch delete
+    const allDocIdsToDelete = Array.from(targetIdSet);
+    deleteStudentsBatchFromFirestore(allDocIdsToDelete).catch(err => {
+      console.error('Failed to batch delete students from cloud:', err);
     });
+  };
+
+  /**
+   * Automatically scans database for duplicate students, consolidates assessments/history,
+   * leaves exactly 1 canonical record per student, and permanently removes duplicates from cloud Firestore.
+   */
+  const handleAutoCleanDuplicates = (): DeduplicationResult => {
+    const result = deduplicateStudents(db.students, db.assessments, db.attendance);
+
+    if (result.removedStudentCount === 0) {
+      setDbNotification({
+        type: 'success',
+        message: 'No duplicate students found. All records are unique and consistent!',
+      });
+      return result;
+    }
+
+    let updatedDb: AppDatabase = {
+      ...db,
+      students: result.deduplicatedStudents,
+      assessments: result.remappedAssessments,
+      attendance: result.remappedAttendance,
+    };
+
+    if (currentUser) {
+      updatedDb = addAuditLog(
+        updatedDb,
+        currentUser,
+        'AUTO_CLEAN_DUPLICATES',
+        `Consolidated and cleaned ${result.removedStudentCount} duplicate student records across ${result.duplicateGroupCount} duplicate group(s), remapping all terminal assessments.`
+      );
+    }
+    updateDatabase(updatedDb);
+
+    // Delete the duplicate documents from cloud Firestore so they don't sync back
+    if (result.removedStudentDocIds.length > 0) {
+      deleteStudentsBatchFromFirestore(result.removedStudentDocIds).catch(err => {
+        console.warn('Failed to delete duplicate student docs from cloud:', err);
+      });
+    }
+
+    setDbNotification({
+      type: 'success',
+      message: `Cleaned ${result.removedStudentCount} duplicate student(s)! Kept 1 consolidated record per student.`,
+    });
+
+    return result;
   };
 
   // ==========================================
@@ -517,17 +566,79 @@ export default function App() {
   // SPREADSHEET IMPORT & SETUP
   // ==========================================
   const handleImportStudents = (newStudents: Student[]) => {
-    const merged = [...newStudents, ...db.students];
-    let updatedDb: AppDatabase = { ...db, students: merged };
+    // Non-destructive overwrite/merge: if student already exists, overwrite; if new, add; never duplicate!
+    const studentList = [...db.students];
+    let newlyAddedCount = 0;
+    let overwrittenCount = 0;
+
+    newStudents.forEach(newStu => {
+      const matchIndex = studentList.findIndex(
+        s =>
+          s.id === newStu.id ||
+          (newStu.admissionNumber &&
+            s.admissionNumber &&
+            s.admissionNumber.toLowerCase().trim() === newStu.admissionNumber.toLowerCase().trim()) ||
+          (newStu.studentId &&
+            s.studentId &&
+            s.studentId.toLowerCase().trim() === newStu.studentId.toLowerCase().trim()) ||
+          (s.name.toLowerCase().trim() === newStu.name.toLowerCase().trim() &&
+            s.className.toLowerCase().trim() === newStu.className.toLowerCase().trim())
+      );
+
+      if (matchIndex >= 0) {
+        // OVERWRITE existing student with incoming fields
+        const existing = studentList[matchIndex];
+        studentList[matchIndex] = {
+          ...existing,
+          ...newStu,
+          id: existing.id, // Preserve original canonical document ID
+          studentId: newStu.studentId || existing.studentId,
+          admissionNumber: newStu.admissionNumber || existing.admissionNumber,
+          className: newStu.className || existing.className,
+          section: newStu.section !== undefined ? newStu.section : existing.section,
+          gender: newStu.gender || existing.gender,
+          status: 'Active',
+        };
+        overwrittenCount++;
+      } else {
+        studentList.unshift({
+          ...newStu,
+          id: newStu.id || `stu-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+          status: newStu.status || 'Active',
+        });
+        newlyAddedCount++;
+      }
+    });
+
+    // Run deduplication to guarantee complete uniqueness
+    const dedup = deduplicateStudents(studentList, db.assessments, db.attendance);
+    let updatedDb: AppDatabase = {
+      ...db,
+      students: dedup.deduplicatedStudents,
+      assessments: dedup.remappedAssessments,
+      attendance: dedup.remappedAttendance,
+    };
+
     if (currentUser) {
       updatedDb = addAuditLog(
         updatedDb,
         currentUser,
         'IMPORT_STUDENTS',
-        `Imported ${newStudents.length} students from spreadsheet`
+        `Imported students from spreadsheet: ${newlyAddedCount} newly registered, ${overwrittenCount} existing records updated/overwritten.`
       );
     }
     updateDatabase(updatedDb);
+
+    if (dedup.removedStudentDocIds.length > 0) {
+      deleteStudentsBatchFromFirestore(dedup.removedStudentDocIds).catch(err => {
+        console.warn('Failed to delete duplicate student docs from cloud:', err);
+      });
+    }
+
+    setDbNotification({
+      type: 'success',
+      message: `Import complete: ${newlyAddedCount} new student(s) registered, ${overwrittenCount} existing student(s) updated/overwritten (0 duplicates created).`,
+    });
   };
 
   const handleImportAssessmentSheet = (
@@ -544,19 +655,45 @@ export default function App() {
     let overwrittenCount = 0;
 
     sheetStudents.forEach(sheetStu => {
-      const matchIndex = studentList.findIndex(
-        s =>
-          s.id === sheetStu.id ||
-          (sheetStu.admissionNumber &&
-            s.admissionNumber &&
-            s.admissionNumber.toLowerCase().trim() === sheetStu.admissionNumber.toLowerCase().trim()) ||
-          (sheetStu.studentId &&
-            s.studentId &&
-            s.studentId.toLowerCase().trim() === sheetStu.studentId.toLowerCase().trim()) ||
-          (s.name.toLowerCase().trim() === sheetStu.name.toLowerCase().trim() &&
-            s.className.toLowerCase().trim() === sheetStu.className.toLowerCase().trim()) ||
-          (s.name.toLowerCase().trim() === sheetStu.name.toLowerCase().trim())
-      );
+      const matchIndex = studentList.findIndex(s => {
+        // 1. Direct document ID match
+        if (s.id && sheetStu.id && s.id === sheetStu.id) return true;
+
+        const sAdm = (s.admissionNumber || '').trim().toLowerCase();
+        const sheetAdm = (sheetStu.admissionNumber || '').trim().toLowerCase();
+        const sId = (s.studentId || '').trim().toLowerCase();
+        const sheetId = (sheetStu.studentId || '').trim().toLowerCase();
+
+        // 2. Exact non-empty Admission Number match
+        if (sheetAdm && sAdm && sheetAdm === sAdm) return true;
+
+        // 3. Exact non-empty Student ID match
+        if (sheetId && sId && sheetId === sId) return true;
+
+        // If both records have distinct non-empty IDs or Admission numbers, they are DIFFERENT students!
+        if (sheetAdm && sAdm && sheetAdm !== sAdm) return false;
+        if (sheetId && sId && sheetId !== sId) return false;
+
+        // 4. Match by Name and Class (ONLY when both full name and class match, name has >=2 words, and IDs do not conflict)
+        const sName = (s.name || '').trim().toLowerCase();
+        const sheetName = (sheetStu.name || '').trim().toLowerCase();
+        const sClass = (s.className || '').trim().toLowerCase();
+        const sheetClass = (sheetStu.className || '').trim().toLowerCase();
+
+        if (
+          sName &&
+          sheetName &&
+          sClass &&
+          sheetClass &&
+          sName === sheetName &&
+          sClass === sheetClass &&
+          sName.split(' ').length >= 2
+        ) {
+          return true;
+        }
+
+        return false;
+      });
 
       if (matchIndex >= 0) {
         // OVERWRITE existing student with updated fields from sheet
@@ -697,16 +834,40 @@ export default function App() {
       }
     });
 
-    // 5. Auto-create any new classes or sections found in the sheet
-    const existingClassNames = new Set(db.classes.map(c => c.name.toLowerCase().trim()));
-    const classesToAdd: ClassItem[] = detectedClasses
-      .filter(cn => cn && !existingClassNames.has(cn.toLowerCase().trim()))
-      .map((cn, i) => ({
-        id: `cls-auto-${Date.now()}-${i}`,
-        name: cn.trim(),
-        order: db.classes.length + i + 1,
-        schoolId: db.schoolId,
-      }));
+    // 5. Auto-create any new classes or sections found in the sheet (canonical check to prevent duplicate classes)
+    const classesToAdd: ClassItem[] = [];
+    detectedClasses.forEach((rawCn, i) => {
+      if (!rawCn || !rawCn.trim()) return;
+      const { className: canonical } = matchCanonicalClass(rawCn, db.classes);
+      const alreadyExists =
+        db.classes.some(c => c.name.toLowerCase().trim() === canonical.toLowerCase().trim()) ||
+        classesToAdd.some(c => c.name.toLowerCase().trim() === canonical.toLowerCase().trim());
+      if (!alreadyExists) {
+        classesToAdd.push({
+          id: `cls-auto-${Date.now()}-${i}`,
+          name: canonical.trim(),
+          order: db.classes.length + classesToAdd.length + 1,
+          schoolId: db.schoolId,
+        });
+      }
+    });
+
+    const finalClasses = [...db.classes, ...classesToAdd];
+
+    // Ensure all students and assessments are assigned to canonical class names
+    studentList.forEach(s => {
+      if (s.className) {
+        const { className: canon } = matchCanonicalClass(s.className, finalClasses);
+        if (canon) s.className = canon;
+      }
+    });
+
+    finalAssessments.forEach(a => {
+      if (a.className) {
+        const { className: canon } = matchCanonicalClass(a.className, finalClasses);
+        if (canon) a.className = canon;
+      }
+    });
 
     const existingSectionNames = new Set(db.sections.map(s => s.name.toLowerCase().trim()));
     const sectionsToAdd: SectionItem[] = detectedSections
@@ -722,7 +883,7 @@ export default function App() {
       students: studentList,
       assessments: finalAssessments,
       attendance: attendanceList,
-      classes: [...db.classes, ...classesToAdd],
+      classes: finalClasses,
       sections: [...db.sections, ...sectionsToAdd],
     };
 
@@ -877,6 +1038,7 @@ export default function App() {
             onSaveStudent={handleSaveStudent}
             onDeleteStudent={handleDeleteStudent}
             onBatchDeleteStudents={handleBatchDeleteStudents}
+            onAutoCleanDuplicates={handleAutoCleanDuplicates}
             setActiveTab={setActiveTab}
             onSelectAssessmentStudent={navigateToAssessment}
             onSelectReportStudent={navigateToReport}
@@ -929,11 +1091,18 @@ export default function App() {
         )}
 
         {activeTab === 'class-summary' && (
-          <ClassSummary
+          <ClassView
             db={db}
             currentUser={currentUser}
+            initialViewMode="broadsheet"
             setActiveTab={setActiveTab}
+            onSelectAssessmentStudent={navigateToAssessment}
             onSelectReportStudent={navigateToReport}
+            onSaveStudent={handleSaveStudent}
+            onSelectStudentProfile={studentId => {
+              setSelectedStudentForProfileId(studentId);
+              setActiveTab('students');
+            }}
           />
         )}
 
