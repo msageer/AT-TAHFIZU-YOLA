@@ -17,7 +17,7 @@ import {
 } from '../utils/excel';
 import { ConfirmModal } from './ConfirmModal';
 import { getApplicableSubjectsForClass } from '../utils/subjectMapping';
-import { getSectionsForClass } from '../utils/classSections';
+import { getSectionsForClass, getFormTeacherForClass } from '../utils/classSections';
 import {
   Save,
   CheckCircle,
@@ -149,13 +149,49 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
 
   // Selected student details
   const selectedStudent = db.students.find(s => s.studentId === selectedStudentId);
+  const studentArm = selectedStudent?.section || (section !== 'ALL' ? section : '');
+
+  // Active form teacher assigned to the current class & arm
+  const activeClassFormTeacher = useMemo(() => {
+    return getFormTeacherForClass(className, studentArm, db.classes, db.users);
+  }, [className, studentArm, db.classes, db.users]);
+
+  // Available teachers (from db.users, db.classes)
+  const availableTeachers = useMemo(() => {
+    const list: Array<{ id: string; name: string; role: string }> = [];
+    const namesSeen = new Set<string>();
+
+    (db.users || []).forEach(u => {
+      if (u.fullName && !namesSeen.has(u.fullName.toLowerCase().trim())) {
+        namesSeen.add(u.fullName.toLowerCase().trim());
+        list.push({ id: u.id, name: u.fullName.trim(), role: u.role });
+      }
+    });
+
+    (db.classes || []).forEach(c => {
+      if (c.classTeacherName && !namesSeen.has(c.classTeacherName.toLowerCase().trim())) {
+        namesSeen.add(c.classTeacherName.toLowerCase().trim());
+        list.push({ id: `cls-${c.id}`, name: c.classTeacherName.trim(), role: 'teacher' });
+      }
+      if (c.sectionTeachers) {
+        Object.entries(c.sectionTeachers).forEach(([sec, name]) => {
+          if (name && !namesSeen.has(name.toLowerCase().trim())) {
+            namesSeen.add(name.toLowerCase().trim());
+            list.push({ id: `cls-sec-${c.id}-${sec}`, name: name.trim(), role: 'teacher' });
+          }
+        });
+      }
+    });
+
+    return list;
+  }, [db.users, db.classes]);
 
   // Assessment entry form state
   const [subjectScores, setSubjectScores] = useState<SubjectScore[]>([]);
   const [daysOpened, setDaysOpened] = useState<number>(90);
   const [daysPresent, setDaysPresent] = useState<number>(85);
   const [psychomotorRatings, setPsychomotorRatings] = useState<Record<string, string>>({});
-  const [formTeacherName, setFormTeacherName] = useState<string>('Aisha Muhammad Ardo');
+  const [formTeacherName, setFormTeacherName] = useState<string>('');
   const [formTeacherComment, setFormTeacherComment] = useState<string>(
     'Good academic progress and exemplary conduct.'
   );
@@ -345,26 +381,29 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
         db.settings.nextTermBegins ||
         '04th Muharram 1448 / 20th July 2026';
 
-      // Auto resolve form teacher from available roles in db.users or class
-      const assignedTeacherUser = db.users?.find(
-        u =>
-          (u.role === 'teacher' || u.role === 'staff') &&
-          u.assignedClass?.toLowerCase().trim() === className.toLowerCase().trim() &&
-          (!section || !u.assignedSection || u.assignedSection.toUpperCase() === section.toUpperCase()) &&
-          u.status !== 'disabled'
+      // Auto resolve authoritative class/form teacher
+      const studentArm = selectedStudent?.section || (section !== 'ALL' ? section : '');
+      const defaultTeacher = getFormTeacherForClass(
+        className,
+        studentArm,
+        db.classes,
+        db.users
       );
-      const defaultTeacher =
-        (section && matchedClass?.sectionTeachers?.[section]) ||
-        (section && matchedClass?.sectionTeachers?.[section.toUpperCase()]) ||
-        assignedTeacherUser?.fullName ||
-        matchedClass?.classTeacherName ||
-        (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');
+
+      // Check if existing record has a placeholder/generic or outdated teacher that should be refreshed to assigned class teacher
+      const isPlaceholderOrGeneric =
+        !existing.formTeacherName ||
+        ['class form teacher', 'form teacher', 'class teacher', 'aisha muhammad ardo', 'ustaza aisha muhammad ardo'].includes(
+          existing.formTeacherName.trim().toLowerCase()
+        ) && defaultTeacher !== 'Class Form Teacher';
+
+      const resolvedTeacher = isPlaceholderOrGeneric ? defaultTeacher : existing.formTeacherName;
 
       setSubjectScores(finalScores);
       setDaysOpened(existing.daysOpened ?? 90);
       setDaysPresent(existing.daysPresent ?? 85);
       setPsychomotorRatings(existing.psychomotorRatings || {});
-      setFormTeacherName(existing.formTeacherName || defaultTeacher);
+      setFormTeacherName(resolvedTeacher || defaultTeacher);
       setFormTeacherComment(existing.formTeacherComment || 'Good academic progress.');
       setHeadTeacherName(existing.headTeacherName || db.settings.headTeacherName || 'Ustaz Al-Amin Kaigama');
       setHeadTeacherComment(existing.headTeacherComment || 'A commendable academic performance. Strive to maintain this standard.');
@@ -394,19 +433,13 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
         db.settings.nextTermBegins ||
         '04th Muharram 1448 / 20th July 2026';
 
-      const assignedTeacherUser = db.users?.find(
-        u =>
-          (u.role === 'teacher' || u.role === 'staff') &&
-          u.assignedClass?.toLowerCase().trim() === className.toLowerCase().trim() &&
-          (!section || !u.assignedSection || u.assignedSection.toUpperCase() === section.toUpperCase()) &&
-          u.status !== 'disabled'
+      const studentArm = selectedStudent?.section || (section !== 'ALL' ? section : '');
+      const defaultTeacher = getFormTeacherForClass(
+        className,
+        studentArm,
+        db.classes,
+        db.users
       );
-      const defaultTeacher =
-        (section && matchedClass?.sectionTeachers?.[section]) ||
-        (section && matchedClass?.sectionTeachers?.[section.toUpperCase()]) ||
-        assignedTeacherUser?.fullName ||
-        matchedClass?.classTeacherName ||
-        (currentUser?.role === 'teacher' && currentUser.fullName ? currentUser.fullName : 'Ustaza Aisha Muhammad Ardo');
 
       // Initialize with ONLY active subjects assigned to this class
       const initialScores: SubjectScore[] = applicableSubjects.map(sub => ({
@@ -1097,16 +1130,50 @@ export const AssessmentEntry: React.FC<AssessmentEntryProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              Form Teacher Name
-            </label>
-            <input
-              type="text"
-              value={formTeacherName}
-              onChange={e => setFormTeacherName(e.target.value)}
-              className="w-full text-xs font-semibold border border-slate-300 rounded p-2"
-              placeholder="e.g. Aisha Muhammad Ardo"
-            />
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-700 uppercase">
+                Form Teacher Name
+              </label>
+              {activeClassFormTeacher && activeClassFormTeacher !== 'Class Form Teacher' && (
+                <button
+                  type="button"
+                  onClick={() => setFormTeacherName(activeClassFormTeacher)}
+                  className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold cursor-pointer underline flex items-center space-x-1"
+                  title="Auto-fetch class teacher"
+                >
+                  <span>Fetch Class Teacher ({activeClassFormTeacher})</span>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={formTeacherName}
+                onChange={e => setFormTeacherName(e.target.value)}
+                className="w-full text-xs font-semibold border border-slate-300 rounded p-2 focus:ring-1 focus:ring-blue-500"
+                placeholder={activeClassFormTeacher || 'e.g. Ustaza Khadija Bello'}
+              />
+              <select
+                value=""
+                onChange={e => {
+                  if (e.target.value) setFormTeacherName(e.target.value);
+                }}
+                className="text-xs border border-slate-300 rounded p-2 bg-white text-slate-700 font-medium shrink-0"
+                title="Select from teachers"
+              >
+                <option value="">-- Quick Pick --</option>
+                {activeClassFormTeacher && activeClassFormTeacher !== 'Class Form Teacher' && (
+                  <option value={activeClassFormTeacher}>
+                    ★ Form Master: {activeClassFormTeacher}
+                  </option>
+                )}
+                {availableTeachers.map(t => (
+                  <option key={t.id} value={t.name}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 

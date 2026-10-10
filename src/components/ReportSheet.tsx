@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
 import { SchoolSettings, Student, AssessmentRecord, GradeBoundary, PsychomotorItem, ClassItem, UserAccount } from '../types';
 import { ClassStatistics } from '../utils/ranking';
-import { formatClassWithSection } from '../utils/classSections';
+import { formatClassWithSection, getFormTeacherForClass } from '../utils/classSections';
+import { matchCanonicalClass } from '../utils/excel';
 
 interface ReportSheetProps {
   settings: SchoolSettings;
@@ -29,11 +30,19 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
 
   // Resolve per-class school fees and teacher information from settings / class configuration
   const targetClassName = assessment.className || student.className;
-  const studentSection = assessment.section || student.section;
-  const cleanClassName = (targetClassName || '').toLowerCase().trim();
+  const rawSection = assessment.section || student.section;
+  const { className: canonicalClassName, section: extractedSection } = matchCanonicalClass(
+    targetClassName || '',
+    classes
+  );
+  const studentSection = (rawSection || extractedSection || '').trim();
+  const cleanClassName = (canonicalClassName || targetClassName || '').toLowerCase().trim();
 
   const matchedClass = classes.find(
-    c => c.name.toLowerCase().trim() === cleanClassName
+    c =>
+      c.name.toLowerCase().trim() === cleanClassName ||
+      c.name.toLowerCase().trim() === (targetClassName || '').toLowerCase().trim() ||
+      c.id === targetClassName
   );
 
   // Term-specific calendar and school fees resolution
@@ -59,9 +68,11 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
   const rawFees =
     matchedClass?.termFees?.[studentTerm] ||
     termCfg?.classFees?.[targetClassName] ||
+    termCfg?.classFees?.[canonicalClassName] ||
     matchedClass?.nextTermFees ||
     termCfg?.defaultFees ||
     settings.classFees?.[targetClassName] ||
+    settings.classFees?.[canonicalClassName] ||
     assessment.nextTermFees ||
     settings.defaultNextTermFees ||
     '₦ 16,000';
@@ -81,69 +92,16 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({
     assessment.nextTermBegins ||
     '04th Muharram 1448 / 20th July 2026';
 
-  // Automatically fetch Form Teacher's name from available roles in school setup
+  // Automatically fetch Form Teacher's name from class configuration, assigned roles, and assessment
   const resolvedFormTeacher = useMemo(() => {
-    // 0. Distinct Arm/Section specific form master configured in Class Setup (e.g. Arm A: Ustaz A, Arm B: Ustaza B)
-    if (studentSection && matchedClass?.sectionTeachers) {
-      const armKey = Object.keys(matchedClass.sectionTeachers).find(
-        k => k.trim().toLowerCase() === studentSection.trim().toLowerCase()
-      );
-      if (armKey && matchedClass.sectionTeachers[armKey]?.trim()) {
-        return matchedClass.sectionTeachers[armKey].trim();
-      }
-    }
-
-    // 1. Direct match: Teacher from users with role 'teacher' or 'staff' assigned to this class and section
-    if (users && users.length > 0) {
-      if (studentSection) {
-        const teacherWithSection = users.find(
-          u =>
-            (u.role === 'teacher' || u.role === 'staff') &&
-            u.assignedClass?.toLowerCase().trim() === cleanClassName &&
-            u.assignedSection?.toUpperCase().trim() === studentSection.toUpperCase().trim() &&
-            u.status !== 'disabled'
-        );
-        if (teacherWithSection?.fullName?.trim()) {
-          return teacherWithSection.fullName.trim();
-        }
-      }
-
-      // 2. Teacher from users assigned to this class
-      const teacherForClass = users.find(
-        u =>
-          (u.role === 'teacher' || u.role === 'staff') &&
-          u.assignedClass?.toLowerCase().trim() === cleanClassName &&
-          u.status !== 'disabled'
-      );
-      if (teacherForClass?.fullName?.trim()) {
-        return teacherForClass.fullName.trim();
-      }
-    }
-
-    // 3. Class configuration form teacher from School Setup -> Classes
-    if (matchedClass?.classTeacherName?.trim()) {
-      return matchedClass.classTeacherName.trim();
-    }
-
-    // 4. Assessment record saved form teacher name (if customized)
-    if (
-      assessment.formTeacherName &&
-      assessment.formTeacherName.trim() &&
-      assessment.formTeacherName.trim().toLowerCase() !== 'class form teacher'
-    ) {
-      return assessment.formTeacherName.trim();
-    }
-
-    // 5. Any active teacher account in available roles
-    if (users && users.length > 0) {
-      const anyTeacher = users.find(u => u.role === 'teacher' && u.status !== 'disabled');
-      if (anyTeacher?.fullName?.trim()) {
-        return anyTeacher.fullName.trim();
-      }
-    }
-
-    return 'Class Form Teacher';
-  }, [users, studentSection, cleanClassName, matchedClass, assessment.formTeacherName]);
+    return getFormTeacherForClass(
+      targetClassName,
+      studentSection,
+      classes,
+      users,
+      assessment.formTeacherName
+    );
+  }, [users, studentSection, targetClassName, classes, assessment.formTeacherName]);
 
   // Automatically fetch Head Teacher / Headmaster name from school settings or administration
   const resolvedHeadTeacher = useMemo(() => {

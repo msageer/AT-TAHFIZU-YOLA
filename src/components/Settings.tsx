@@ -129,10 +129,25 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
         namesSeen.add(c.classTeacherName.toLowerCase().trim());
         list.push({ id: `cls-teacher-${c.id}`, name: c.classTeacherName.trim(), role: 'teacher' });
       }
+      if (c.sectionTeachers) {
+        Object.entries(c.sectionTeachers).forEach(([sec, name]) => {
+          if (name && !namesSeen.has(name.toLowerCase().trim())) {
+            namesSeen.add(name.toLowerCase().trim());
+            list.push({ id: `cls-sec-${c.id}-${sec}`, name: name.trim(), role: 'teacher' });
+          }
+        });
+      }
+    });
+
+    (db.subjects || []).forEach(s => {
+      if (s.teacherName && !namesSeen.has(s.teacherName.toLowerCase().trim())) {
+        namesSeen.add(s.teacherName.toLowerCase().trim());
+        list.push({ id: `sub-teacher-${s.id}`, name: s.teacherName.trim(), role: 'teacher' });
+      }
     });
 
     return list;
-  }, [db.users, db.classes]);
+  }, [db.users, db.classes, db.subjects]);
 
   // Current term configuration for selectedTermSettingsTab
   const currentTermCfg = schoolSettings.termSettings?.[selectedTermSettingsTab] || {
@@ -250,6 +265,7 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
   };
 
   const handleUpdateClassTeacherDirect = (classId: string, teacherName: string, sectionName?: string) => {
+    const targetClass = classes.find(c => c.id === classId);
     const updated = classes.map(c => {
       if (c.id !== classId) return c;
       if (sectionName) {
@@ -259,15 +275,34 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
             ...(c.sectionTeachers || {}),
             [sectionName]: teacherName,
           },
+          ...(!c.classTeacherName ? { classTeacherName: teacherName } : {}),
         };
       }
       return { ...c, classTeacherName: teacherName };
     });
-    const targetClass = classes.find(c => c.id === classId);
     setClasses(updated);
+
+    // Synchronize to db.assessments so existing report cards and assessment sheets update immediately
+    const targetClassName = targetClass?.name;
+    const updatedAssessments = targetClassName
+      ? (db.assessments || []).map(a => {
+          const isClassMatch =
+            (a.className || '').toLowerCase().trim() === targetClassName.toLowerCase().trim();
+          if (!isClassMatch) return a;
+          if (sectionName && a.section && a.section.toLowerCase().trim() !== sectionName.toLowerCase().trim()) {
+            return a;
+          }
+          return {
+            ...a,
+            formTeacherName: teacherName,
+          };
+        })
+      : db.assessments;
+
     onUpdateDb({
       ...db,
       classes: updated,
+      assessments: updatedAssessments,
     });
     showNotification(
       teacherName
@@ -1223,6 +1258,13 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                                 </option>
                               ))}
                             </select>
+                            <input
+                              type="text"
+                              value={cls.sectionTeachers?.[arm] || ''}
+                              onChange={e => handleUpdateClassTeacherDirect(cls.id, e.target.value, arm)}
+                              placeholder={`Or type Arm ${arm} teacher`}
+                              className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:ring-1 focus:ring-blue-500 bg-slate-50/70"
+                            />
                           </div>
                         ));
                       }
@@ -1244,6 +1286,13 @@ export const Settings: React.FC<SettingsProps> = ({ db, onUpdateDb, onResetDefau
                               </option>
                             ))}
                           </select>
+                          <input
+                            type="text"
+                            value={cls.classTeacherName || ''}
+                            onChange={e => handleUpdateClassTeacherDirect(cls.id, e.target.value)}
+                            placeholder="Or type custom Form Teacher"
+                            className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:ring-1 focus:ring-blue-500 bg-slate-50/70"
+                          />
                         </div>
                       ];
                     })}

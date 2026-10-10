@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppDatabase, Student, AssessmentRecord, UserAccount, NavigationTab } from '../types';
 import { computeClassStatistics, rankAssessments } from '../utils/ranking';
-import { getSectionsForClass, formatClassWithSection } from '../utils/classSections';
+import { getSectionsForClass, formatClassWithSection, getFormTeacherForClass } from '../utils/classSections';
 import { exportAssessmentBroadsheetToExcel, matchCanonicalClass } from '../utils/excel';
 import { ReportSheet } from './ReportSheet';
 import {
@@ -87,6 +87,16 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
       setSelectedSection('');
     }
   }, [selectedClass, classSections, selectedSection, hasSections]);
+
+  // Form teacher for the selected broadsheet class and section
+  const broadsheetFormTeacher = useMemo(() => {
+    return getFormTeacherForClass(
+      selectedClass,
+      selectedSection !== 'ALL' ? selectedSection : undefined,
+      db.classes,
+      db.users
+    );
+  }, [selectedClass, selectedSection, db.classes, db.users]);
 
   const [selectedStudentId, setSelectedStudentId] = useState<string>(
     initialStudentId || 'ALL'
@@ -1274,6 +1284,11 @@ export const ReportCenter: React.FC<ReportCenterProps> = ({
             <div className="space-y-6">
               <div className="border-b border-slate-400 w-3/4 mx-auto"></div>
               <div className="font-bold text-slate-700">Form Teacher&apos;s Signature</div>
+              {broadsheetFormTeacher && broadsheetFormTeacher !== 'Class Form Teacher' && (
+                <div className="text-[11px] font-semibold text-slate-600 mt-1 uppercase tracking-wide">
+                  ({broadsheetFormTeacher})
+                </div>
+              )}
             </div>
             <div className="space-y-6">
               <div className="border-b border-slate-400 w-3/4 mx-auto"></div>

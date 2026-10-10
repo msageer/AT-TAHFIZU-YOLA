@@ -3,6 +3,7 @@ import { getAuth } from 'firebase/auth';
 import {
   initializeFirestore,
   getFirestore,
+  setLogLevel,
   doc,
   getDoc,
   setDoc,
@@ -48,6 +49,13 @@ function getInitializedFirestore() {
 
 export const db = getInitializedFirestore();
 export const auth = getAuth(app);
+
+// Silence internal non-critical Firestore logs (e.g. 10s offline fallback notices)
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 // 2. Strict Error Handling conforming to FirestoreErrorInfo
 export enum OperationType {

@@ -1779,7 +1779,14 @@ export async function parseAndValidateAssessmentSpreadsheet(
     }
 
     // Resolve teacher and leadership
-    const matchedClassObj = db.classes.find(c => c.name.toLowerCase().trim() === rowClass.toLowerCase().trim());
+    const { className: canonicalRowClass, section: extractedRowSec } = matchCanonicalClass(rowClass, db.classes);
+    const effectiveRowSec = rowSection || extractedRowSec;
+    const matchedClassObj = db.classes.find(
+      c =>
+        c.name.toLowerCase().trim() === rowClass.toLowerCase().trim() ||
+        c.name.toLowerCase().trim() === canonicalRowClass.toLowerCase().trim() ||
+        c.id === rowClass
+    );
     const termCfg = db.settings.termSettings?.[rowTerm];
     const defaultFees =
       matchedClassObj?.termFees?.[rowTerm] ||
@@ -1820,10 +1827,9 @@ export async function parseAndValidateAssessmentSpreadsheet(
         'psy-7': 'A',
       },
       formTeacherName:
-        (rowSection && (matchedClassObj?.sectionTeachers?.[rowSection] || matchedClassObj?.sectionTeachers?.[rowSection.toUpperCase()])) ||
+        (effectiveRowSec && (matchedClassObj?.sectionTeachers?.[effectiveRowSec] || matchedClassObj?.sectionTeachers?.[effectiveRowSec.toUpperCase()])) ||
         matchedClassObj?.classTeacherName ||
-        db.settings.schoolName ||
-        'Form Teacher',
+        'Class Form Teacher',
       formTeacherComment: autoComment,
       headTeacherName: db.settings.headTeacherName || 'Ustaz Al-Amin Kaigama',
       headTeacherComment: 'A commendable academic performance. Strive to maintain this standard.',

@@ -1,4 +1,5 @@
-import { ClassItem, SectionItem, AppDatabase } from '../types';
+import { ClassItem, SectionItem, AppDatabase, UserAccount } from '../types';
+import { matchCanonicalClass } from './excel';
 
 /**
  * Returns the configured arms/sections for a given class.
@@ -258,3 +259,120 @@ export function cascadeRenameClass(
     users: updatedUsers,
   };
 }
+
+/**
+ * Resolves the authoritative Form Teacher (Class Teacher) name for a given class and optional section/arm.
+ * Priority:
+ * 1. Specific arm/section teacher configured on class (e.g. Arm A: Ustaza Aisha, Arm B: Ustaz Ibrahim Al-Amin)
+ * 2. Assigned form/class teacher configured on class (class.classTeacherName)
+ * 3. Registered teacher user in db.users assigned to this class and section
+ * 4. Registered teacher user in db.users assigned to this class (general)
+ * 5. Any configured arm teacher on this class (fallback if section was unspecified)
+ * 6. Provided saved teacher name (if non-empty and not a generic placeholder like "Class Form Teacher" or "Form Teacher")
+ * 7. Active teacher account in db.users
+ * 8. Fallback: "Class Form Teacher"
+ */
+export function getFormTeacherForClass(
+  className: string,
+  section?: string,
+  classes: ClassItem[] = [],
+  users: UserAccount[] = [],
+  savedTeacherName?: string
+): string {
+  if (!className && !savedTeacherName) {
+    return 'Class Form Teacher';
+  }
+
+  const { className: canonicalClassName, section: extractedSection } = matchCanonicalClass(
+    className || '',
+    classes
+  );
+  const effectiveSection = (section || extractedSection || '').trim();
+  const cleanClassName = (canonicalClassName || className || '').toLowerCase().trim();
+
+  // Find class item by canonical name, original name, or id
+  const matchedClass = classes.find(
+    c =>
+      c.name.toLowerCase().trim() === cleanClassName ||
+      c.name.toLowerCase().trim() === (className || '').toLowerCase().trim() ||
+      c.id === className
+  );
+
+  // 1. Arm/Section specific form master configured in Class Setup (e.g. Arm A: Ustaza Aisha, Arm B: Ustaz Ibrahim Al-Amin)
+  if (effectiveSection && matchedClass?.sectionTeachers) {
+    const armKey = Object.keys(matchedClass.sectionTeachers).find(
+      k => k.trim().toLowerCase() === effectiveSection.toLowerCase()
+    );
+    if (armKey && matchedClass.sectionTeachers[armKey]?.trim()) {
+      return matchedClass.sectionTeachers[armKey].trim();
+    }
+  }
+
+  // 2. Class configuration form teacher from School Setup -> Classes / Quick Assignment
+  if (matchedClass?.classTeacherName?.trim()) {
+    return matchedClass.classTeacherName.trim();
+  }
+
+  // 3. User account directly assigned to this class and section
+  if (users && users.length > 0) {
+    if (effectiveSection) {
+      const teacherWithSection = users.find(
+        u =>
+          (u.role === 'teacher' || u.role === 'staff') &&
+          (u.assignedClass?.toLowerCase().trim() === cleanClassName ||
+            u.assignedClass?.toLowerCase().trim() === (className || '').toLowerCase().trim()) &&
+          u.assignedSection?.toUpperCase().trim() === effectiveSection.toUpperCase() &&
+          u.status !== 'disabled'
+      );
+      if (teacherWithSection?.fullName?.trim()) {
+        return teacherWithSection.fullName.trim();
+      }
+    }
+
+    // 4. User account assigned to this class (general)
+    const teacherForClass = users.find(
+      u =>
+        (u.role === 'teacher' || u.role === 'staff') &&
+        (u.assignedClass?.toLowerCase().trim() === cleanClassName ||
+          u.assignedClass?.toLowerCase().trim() === (className || '').toLowerCase().trim()) &&
+        u.status !== 'disabled'
+    );
+    if (teacherForClass?.fullName?.trim()) {
+      return teacherForClass.fullName.trim();
+    }
+  }
+
+  // 5. Any configured arm teacher on the class (e.g. fallback if student section was omitted)
+  if (matchedClass?.sectionTeachers) {
+    const anyArmTeacher = Object.values(matchedClass.sectionTeachers).find(name => name?.trim());
+    if (anyArmTeacher?.trim()) {
+      return anyArmTeacher.trim();
+    }
+  }
+
+  // 6. Saved teacher name from record if valid and not a placeholder
+  if (savedTeacherName && savedTeacherName.trim()) {
+    const savedTrimmed = savedTeacherName.trim();
+    const isPlaceholder = [
+      'class form teacher',
+      'form teacher',
+      'class teacher',
+      'teacher',
+      'unassigned',
+    ].includes(savedTrimmed.toLowerCase());
+    if (!isPlaceholder) {
+      return savedTrimmed;
+    }
+  }
+
+  // 7. Active teacher account in system
+  if (users && users.length > 0) {
+    const anyTeacher = users.find(u => u.role === 'teacher' && u.status !== 'disabled');
+    if (anyTeacher?.fullName?.trim()) {
+      return anyTeacher.fullName.trim();
+    }
+  }
+
+  return 'Class Form Teacher';
+}
+
