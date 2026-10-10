@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import {
+  initializeFirestore,
   getFirestore,
   doc,
   getDoc,
@@ -29,7 +30,23 @@ import { deduplicateStudents } from '../utils/studentDeduplication';
 
 // 1. Initialize Firebase
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Configure Firestore with long-polling to prevent WebSocket timeouts and 10-second backend unreachable errors
+function getInitializedFirestore() {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalForceLongPolling: true,
+      },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+}
+
+export const db = getInitializedFirestore();
 export const auth = getAuth(app);
 
 // 2. Strict Error Handling conforming to FirestoreErrorInfo
@@ -69,8 +86,6 @@ if (typeof window !== 'undefined') {
   try {
     sessionStorage.removeItem(QUOTA_STORAGE_KEY);
     localStorage.removeItem(QUOTA_STORAGE_KEY);
-    // Ensure network is active
-    enableNetwork(db).catch(() => {});
   } catch {
     // ignore
   }
@@ -147,8 +162,13 @@ export function handleFirestoreError(
     return;
   }
 
+  const errorMsg = error instanceof Error ? error.message : String(error);
+  const isPermissionError =
+    errorMsg.includes('permission-denied') ||
+    errorMsg.includes('Missing or insufficient permissions');
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -164,10 +184,16 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.warn('Firestore Operation Notice:', JSON.stringify(errInfo));
+
+  if (isPermissionError) {
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+    throw new Error(JSON.stringify(errInfo));
+  } else {
+    console.warn('Firestore Notice:', JSON.stringify(errInfo));
+  }
 }
 
-// 3. Optional Connection Test
+// 3. Connection Test
 export async function testConnection(): Promise<boolean> {
   if (isQuotaExhausted()) {
     return false;
@@ -177,6 +203,9 @@ export async function testConnection(): Promise<boolean> {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore client operates in offline mode.');
+    }
     if (isQuotaExceededError(error)) {
       markQuotaExhausted();
       return false;
